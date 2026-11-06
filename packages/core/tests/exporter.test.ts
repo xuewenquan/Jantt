@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { exportToCsv } from "../src/exporter";
 import { JanttData } from "../src/types";
+import { getTaskDependencyRelations } from "../src/dependencies";
 
 const mockData: JanttData = {
   meta: { title: "Export Test Schedule" },
@@ -42,6 +43,14 @@ describe("Exporter Engine", () => {
       { id: "c", start: "2026-11-04", end: "2026-11-05", dependsOn: [{ id: "a,b", type: "SS" as const, lagDays: 1 }] }
     ] });
     expect(csv.replace(/""/g, '"')).toContain('json:[{"id":"a,b","type":"SS","lagDays":1}]');
+  });
+
+  it.each(["X:FS", "X+2", "X-2d", "json:task"])("preserves ambiguous predecessor ID %s", (id) => {
+    const csv = exportToCsv({ tasks: [{ id: "b", start: "2026-11-04", end: "2026-11-05", dependsOn: { id } }] });
+    const encoded = csv.match(/json:\[(.*?)\]/)?.[0].replace(/""/g, '"');
+    expect(encoded).toBeDefined();
+    const dependsOn = JSON.parse(encoded!.slice(5));
+    expect(getTaskDependencyRelations({ dependsOn })[0].id).toBe(id);
   });
   // ─── CSV header and rows ──────────────────────────────────────────────
 

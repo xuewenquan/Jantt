@@ -30,6 +30,20 @@ describe("Jantt Schema Validator", () => {
     expect(validate({ calendars: { custom: { workingDays: [1, 2, 3, 4], holidays: ["2026-09-01"], exceptions: [{ date: "2026-09-05", isWorkingDay: true }] } }, tasks: [{ ...tasks[0], calendarId: "custom" }] }).valid).toBe(true);
   });
 
+  it("validates inline calendars for projects, people and tasks", () => {
+    const task = { id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03" };
+    const result = validate({
+      meta: { calendar: { workingDays: [] } },
+      people: [{ id: "p", name: "Person", calendar: { holidays: ["invalid"] } }],
+      tasks: [{ ...task, calendar: { exceptions: [{ date: "2026-09-01", isWorkingDay: "yes" }] } }]
+    });
+    expect(result.errors.map((error) => error.path)).toEqual(expect.arrayContaining([
+      "meta.calendar.workingDays", "people[0].calendar.holidays", "tasks[0].calendar.exceptions"
+    ]));
+    const calendar = { workingDays: [1, 2, 3, 4, 5], holidays: ["2026-09-01"] };
+    expect(validate({ meta: { calendar }, people: [{ id: "p", name: "Person", calendar }], tasks: [{ ...task, calendar }] }).valid).toBe(true);
+  });
+
   it("validates the project target date", () => {
     const tasks = [{ id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03" }];
     expect(validate({ meta: { targetDate: "not-a-date" }, tasks }).errors.some((error) => error.path === "meta.targetDate")).toBe(true);

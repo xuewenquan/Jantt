@@ -75,6 +75,10 @@ export function validate(json: unknown): ValidationResult {
   if (data.calendars && typeof data.calendars === "object" && !Array.isArray(data.calendars)) {
     for (const [id, calendar] of Object.entries(data.calendars)) validateCalendarDefinition(calendar, `calendars.${id}`);
   }
+  validateCalendarDefinition(data.meta?.calendar, "meta.calendar");
+  if (Array.isArray(data.people)) data.people.forEach((person, index) => {
+    if (person && typeof person === "object") validateCalendarDefinition(person.calendar, `people[${index}].calendar`);
+  });
 
   const capacity = data.meta?.defaultResourceCapacity;
   if (data.meta?.targetDate !== undefined && !isValidISODate(data.meta.targetDate)) {
@@ -122,6 +126,7 @@ export function validate(json: unknown): ValidationResult {
     if (task._deleted) return; // Skip soft-deleted tombstones defensively
     const taskId = task.id;
     validateCalendarReference(task.calendar, `${path}.calendar`, taskId);
+    validateCalendarDefinition(task.calendar, `${path}.calendar`);
     validateCalendarReference(task.calendarId, `${path}.calendarId`, taskId);
     if (task.allocation !== undefined && (typeof task.allocation !== "number" || !Number.isFinite(task.allocation) || task.allocation < 0)) {
       errors.push({ path: `${path}.allocation`, taskId, code: "SCHEMA_MISMATCH", message: `Task '${taskId}' allocation must be a finite non-negative number.`, suggestion: "Use allocation units where 1 means 100%." });

@@ -1,6 +1,6 @@
 import { JanttData } from "./types";
 import { diffDays } from "./date-math";
-import { formatDependency, getRelationLag, getTaskDependencyRelations } from "./dependencies";
+import { formatDependency, getRelationLag, getTaskDependencyRelations, parseDependencyRelation } from "./dependencies";
 import { DEFAULT_GAP_DAYS } from "./constants";
 
 /**
@@ -32,7 +32,7 @@ export function exportToCsv(data: JanttData): string {
     const progressPct = t.progress !== undefined && t.progress !== null ? `${Math.round(t.progress * 100)}%` : "";
     const isMilestone = Boolean(t.milestone || duration === 0);
     const relations = getTaskDependencyRelations(t);
-    const dependsOn = relations.some((relation) => /[,;]/.test(relation.id))
+    const dependsOn = relations.some((relation) => /[,;]/.test(relation.id) || formatDependency(relation).startsWith("json:") || parseDependencyRelation(formatDependency(relation))?.id !== relation.id)
       ? `json:${JSON.stringify(relations.map((relation) => ({
           id: relation.id,
           type: relation.type,
