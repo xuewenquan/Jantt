@@ -1,7 +1,8 @@
-import { Task } from "./types";
+import { Task, JanttData } from "./types";
 import { DEFAULT_GAP_DAYS } from "./constants";
 import { getTaskDependencies } from "./cpm";
 import { CascadeResolveStage } from "./pipeline/stages/cascade-resolve-stage";
+import type { PipelineContext } from "./pipeline/contracts";
 
 export { getTaskDependencies, calculateCriticalPath } from "./cpm";
 
@@ -40,8 +41,8 @@ export function hasDependencyCycle(tasks: Task[]): boolean {
   });
 
   let visited = 0;
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
+    const curr = queue[queueIndex];
     visited++;
     const successors = adj.get(curr) || [];
     for (const s of successors) {
@@ -58,6 +59,34 @@ export function hasDependencyCycle(tasks: Task[]): boolean {
 
 const defaultCascadeStage = new CascadeResolveStage();
 
+/** Calendar context shared by scheduling entry points for a project. */
+export function getScheduleContext(data: JanttData): Omit<PipelineContext, "defaultGapDays"> {
+  return { calendar: data.meta?.calendar, useWorkingDays: data.meta?.useWorkingDays, calendars: data.calendars, people: data.people, targetDate: data.meta?.targetDate };
+}
+
+/**
+ * Returns the roots and their transitive predecessors, with root objects
+ * overriding stored tasks that share an ID. Only this subgraph can affect the
+ * roots' earliest dates.
+ */
+export function resolveDependencySubgraph(tasks: Task[], roots: Task[]): Task[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  for (const root of roots) byId.set(root.id, root);
+  const needed = new Set<string>();
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (needed.has(current.id)) continue;
+    needed.add(current.id);
+    for (const id of getTaskDependencies(current)) {
+      if (id === current.id || needed.has(id)) continue;
+      const predecessor = byId.get(id);
+      if (predecessor) stack.push(predecessor);
+    }
+  }
+  return [...needed].map((id) => byId.get(id)!).filter(Boolean);
+}
+
 /**
  * Resolves the scheduling cascade for a list of tasks.
  *
@@ -71,7 +100,7 @@ const defaultCascadeStage = new CascadeResolveStage();
  * @param defaultGapDays - Default spacing between sibling tasks (default: 2).
  * @returns A fresh, schedule-consistent array of tasks.
  */
-export function resolveSchedule(tasks: Task[], defaultGapDays = DEFAULT_GAP_DAYS): Task[] {
-  return defaultCascadeStage.process(tasks, { defaultGapDays });
+export function resolveSchedule(tasks: Task[], defaultGapDays = DEFAULT_GAP_DAYS, options?: Omit<PipelineContext, "defaultGapDays">): Task[] {
+  return defaultCascadeStage.process(tasks, { ...options, defaultGapDays });
 }
 

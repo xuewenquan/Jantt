@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import {
   validate,
   calculateCriticalPath,
+  getScheduleContext,
+  DEFAULT_GAP_DAYS,
   auditScheduleIntegrity,
   calculateEVM,
   runMonteCarloSimulation
@@ -138,7 +140,8 @@ if (command === "audit") {
     const json = JSON.parse(content);
     const tasks = json.tasks || [];
 
-    const cpm = calculateCriticalPath(tasks);
+    const cpm = calculateCriticalPath(tasks, { ...getScheduleContext(json), defaultGapDays: json.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS });
+    if (cpm.errors?.length) throw new Error(cpm.errors.join("; "));
     const health = auditScheduleIntegrity(tasks, cpm);
     const evm = calculateEVM(tasks);
 
@@ -305,11 +308,13 @@ if (command === "export") {
     } else if (format === "html") {
       outputContent = exportExecutiveReportHtml(json.tasks || [], {
         title: json.meta?.title || parsedPath.name,
-        projectCode: json.meta?.code || "PROJ-1"
+        projectCode: json.meta?.code || "PROJ-1",
+        cpmOptions: { ...getScheduleContext(json), defaultGapDays: json.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS }
       });
     } else if (format === "svg") {
       outputContent = exportExecutiveReportSvg(json.tasks || [], {
-        title: json.meta?.title || parsedPath.name
+        title: json.meta?.title || parsedPath.name,
+        cpmOptions: { ...getScheduleContext(json), defaultGapDays: json.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS }
       });
     }
 

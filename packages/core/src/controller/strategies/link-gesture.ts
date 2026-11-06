@@ -1,5 +1,6 @@
 import { IGestureStrategy, DragState, GestureContext } from "../contracts";
-import { getTaskDependencies, hasDependencyCycle, resolveSchedule } from "../../resolver";
+import { getTaskDependencies, hasDependencyCycle, resolveSchedule, getScheduleContext } from "../../resolver";
+import { appendDependency } from "../../dependencies";
 
 export class LinkGestureStrategy implements IGestureStrategy {
   public readonly mode = "link" as const;
@@ -26,23 +27,22 @@ export class LinkGestureStrategy implements IGestureStrategy {
 
     if (linkFromTaskId && targetTaskId && targetTaskId !== linkFromTaskId) {
       const targetTask = ctx.data.tasks.find((t) => t.id === targetTaskId);
-      if (targetTask) {
+      if (targetTask && !targetTask.locked) {
         const existing = getTaskDependencies(targetTask);
-        if (!existing.includes(linkFromTaskId)) {
-          const nextDeps = existing.length === 0 ? linkFromTaskId : [...existing, linkFromTaskId];
-          // Test if adding this link creates a circular dependency
-          const candidateTasks = ctx.data.tasks.map((t) =>
-            t.id === targetTaskId ? { ...t, dependsOn: nextDeps } : t
+        if (existing.includes(linkFromTaskId)) return;
+        const nextDeps = appendDependency(targetTask.dependsOn, linkFromTaskId);
+        // Test if adding this link creates a circular dependency
+        const candidateTasks = ctx.data.tasks.map((t) =>
+          t.id === targetTaskId ? { ...t, dependsOn: nextDeps } : t
+        );
+        if (hasDependencyCycle(candidateTasks)) {
+          ctx.options.onError?.(
+            new Error(`Adding dependency from ${linkFromTaskId} to ${targetTaskId} would create a circular dependency cycle.`)
           );
-          if (hasDependencyCycle(candidateTasks)) {
-            ctx.options.onError?.(
-              new Error(`Adding dependency from ${linkFromTaskId} to ${targetTaskId} would create a circular dependency cycle.`)
-            );
-            return;
-          }
-          targetTask.dependsOn = nextDeps;
+          return;
         }
-        const resolvedTasks = resolveSchedule(ctx.data.tasks, ctx.defaultGapDays);
+        targetTask.dependsOn = nextDeps;
+        const resolvedTasks = resolveSchedule(ctx.data.tasks, ctx.defaultGapDays, getScheduleContext(ctx.data));
         ctx.data.tasks = resolvedTasks;
         ctx.onRenderRequest();
         ctx.options.onLinkCreate?.(linkFromTaskId, targetTaskId);

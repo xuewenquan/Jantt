@@ -1,4 +1,5 @@
 import { JanttData } from "../types";
+import { dependencySignature, stableJson } from "./task-merger";
 
 /**
  * Computes a fast, deterministic 64-bit FNV-1a content hash of a Jantt plan.
@@ -22,12 +23,13 @@ export function calculatePlanHash(data: JanttData | null | undefined): string {
           category: String(t.category || ""),
           assignee: String(t.assignee || t.person || ""),
           assignees: Array.isArray(t.assignees) ? [...t.assignees].sort() : [],
-          dependsOn: Array.isArray(t.dependsOn)
-            ? [...t.dependsOn].sort().join(",")
-            : t.dependsOn
-            ? String(t.dependsOn)
-            : null,
-          gapDays: Number(t.gapDays ?? 0),
+          dependsOn: dependencySignature(t),
+          gapDays: t.gapDays ?? null,
+          minGapDays: t.minGapDays ?? null,
+          calendar: t.calendar ?? null,
+          calendarId: t.calendarId ?? null,
+          allocation: t.allocation ?? null,
+          fields: t.fields ?? null,
           notes: String(t.notes || ""),
           color: String(t.color || "")
         }))
@@ -51,7 +53,9 @@ export function calculatePlanHash(data: JanttData | null | undefined): string {
         .map((p) => ({
           id: String(p.id || ""),
           name: String(p.name || ""),
-          role: String(p.role || "")
+          role: String(p.role || ""),
+          calendar: p.calendar ?? null,
+          calendarId: p.calendarId ?? null
         }))
         .sort((a, b) => a.id.localeCompare(b.id))
     : [];
@@ -72,17 +76,23 @@ export function calculatePlanHash(data: JanttData | null | undefined): string {
     start: String(data.meta?.start || data.meta?.chartStart || ""),
     end: String(data.meta?.end || data.meta?.chartEnd || ""),
     defaultGapDays: Number(data.meta?.defaultGapDays ?? 2),
-    scale: String(data.meta?.scale || "day")
+    scale: String(data.meta?.scale || "day"),
+    calendar: data.meta?.calendar ?? null,
+    useWorkingDays: Boolean(data.meta?.useWorkingDays),
+    targetDate: data.meta?.targetDate ?? null,
+    defaultResourceCapacity: data.meta?.defaultResourceCapacity ?? null,
+    resourceCapacities: data.meta?.resourceCapacities ?? null
   };
 
-  const payload = JSON.stringify({
+  const payload = stableJson({
     meta: normalizedMeta,
     tasks: normalizedTasks,
     notes: normalizedNotes,
     people: normalizedPeople,
     teams: normalizedTeams,
-    categories: data.categories || {}
-  });
+    categories: data.categories || {},
+    calendars: data.calendars || {}
+  })!;
 
   // 64-bit FNV-1a Hash simulation with dual 32-bit words
   let h1 = 0x811c9dc5;

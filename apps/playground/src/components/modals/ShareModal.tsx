@@ -21,6 +21,7 @@ import {
   FileText
 } from "lucide-react";
 import type { JanttData, ThemeDefinition } from "@jantt/core";
+import { DEFAULT_GAP_DAYS, getScheduleContext } from "@jantt/core";
 import { exportMsProjectXml, exportPrimaveraXer, exportSpreadsheetCsv, exportExecutiveReportHtml } from "@jantt/interop";
 import type { SavedProject, ActiveView } from "../../types";
 import type { UserProfile } from "../../firebase";
@@ -116,6 +117,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     const html = exportExecutiveReportHtml(parsedData.tasks, {
       title: currentProjectName || "Executive Project Status & Schedule Health Report",
       projectCode: activeProjectId || "PROJ-1",
+      cpmOptions: { ...getScheduleContext(parsedData), defaultGapDays: parsedData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS, targetDate: parsedData.meta?.targetDate },
       theme: activeTheme?.mode === "dark" ? "dark" : "corporate"
     });
     triggerDownload(`${(currentProjectName || "jantt-executive-report").toLowerCase().replace(/[^a-z0-9_-]/g, "_")}.html`, html, "text/html;charset=utf-8;");
@@ -698,11 +700,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
               <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--jantt-text, #1E293B)", display: "flex", alignItems: "center", gap: "6px" }}>
                 <Building2 size={13} />
-                <span>Enterprise Interoperability & Lossless Export</span>
+                <span>Enterprise Interoperability</span>
               </div>
             </div>
             <div style={{ color: "var(--jantt-text-muted)", fontSize: "11px", marginBottom: "10px", lineHeight: "1.4" }}>
-              Losslessly export schedule constraints, milestones, and 4-type dependencies into standard enterprise suites:
+              Export tasks and dependency relationships. Calendars and holidays are not transferred by these formats; use JSON to retain the complete project configuration.
             </div>
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button

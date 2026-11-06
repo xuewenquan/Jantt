@@ -7,6 +7,15 @@ import {
 import { Task } from "@jantt/core";
 
 describe("Executive Vector PDF Booklet & Report Engine", () => {
+  it("highlights only the driving relationship between the same two tasks", () => {
+    const tasks: Task[] = [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-04" },
+      { id: "b", category: "dev", start: "2026-11-04", end: "2026-11-05", dependsOn: ["a:FS+0d", "a:SS+0d"] }
+    ];
+    const svg = exportExecutiveReportSvg(tasks, { statusDate: "2026-11-02" });
+    expect(svg.match(/stroke="#ef4444" stroke-width="1\.2"/g)).toHaveLength(1);
+    expect(svg.match(/stroke="#94a3b8" stroke-width="1\.2"/g)).toHaveLength(1);
+  });
   const sampleTasks: Task[] = [
     {
       id: "T1",

@@ -1,17 +1,23 @@
-import { Task } from "../types";
+import { Task, Person, WorkingCalendar, CalendarPreset } from "../types";
 import { DEFAULT_GAP_DAYS } from "../constants";
 import { IPipelineStage, PipelineContext } from "./contracts";
 import { SanitizeStage } from "./stages/sanitize-stage";
 import { CycleGuardStage } from "./stages/cycle-guard-stage";
 import { CascadeResolveStage } from "./stages/cascade-resolve-stage";
 import { CriticalPathStage } from "./stages/critical-path-stage";
+import { CalendarError } from "../calendar";
 
 export interface SchedulePipelineOptions {
   defaultGapDays?: number;
+  targetDate?: string;
   autoCascade?: boolean;
   breakCycles?: boolean;
   includeCriticalPath?: boolean;
   options?: Record<string, any>;
+  calendar?: WorkingCalendar | CalendarPreset;
+  calendars?: Record<string, WorkingCalendar>;
+  people?: Person[];
+  useWorkingDays?: boolean;
 }
 
 /**
@@ -70,6 +76,11 @@ export class SchedulePipeline {
       defaultGapDays: options.defaultGapDays ?? DEFAULT_GAP_DAYS,
       autoCascade: options.autoCascade ?? true,
       diagnostics: [],
+      calendar: options.calendar,
+      calendars: options.calendars,
+      people: options.people,
+      useWorkingDays: options.useWorkingDays,
+      targetDate: options.targetDate,
       options: {
         breakCycles: options.breakCycles ?? false,
         ...options.options
@@ -78,7 +89,14 @@ export class SchedulePipeline {
 
     let current = tasks;
     for (const stage of this.stages) {
-      current = stage.process(current, context);
+      try {
+        current = stage.process(current, context);
+      } catch (error) {
+        if (!(error instanceof CalendarError)) throw error;
+        context.diagnostics?.push(error.message);
+        context.fatalError = error.message;
+        break;
+      }
     }
 
     return {

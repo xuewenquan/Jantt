@@ -8,6 +8,59 @@ import brokenBadDateJson from "../../../examples/broken-bad-date.json";
 import brokenDanglingDepJson from "../../../examples/broken-dangling-dependency.json";
 
 describe("Jantt Schema Validator", () => {
+  it("reports unknown calendar references in projects, people and tasks", () => {
+    const tasks = [{ id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03", calendarId: "missing-task" }];
+    const result = validate({ meta: { calendar: "missing-project" }, people: [{ id: "p", name: "Person", calendarId: "missing-person" }], tasks });
+    expect(result.errors.map((error) => error.path)).toEqual(expect.arrayContaining(["meta.calendar", "people[0].calendarId", "tasks[0].calendarId"]));
+    expect(validate({ calendars: { custom: { workingDays: [1, 2, 3, 4] } }, tasks: [{ ...tasks[0], calendarId: "custom" }] }).valid).toBe(true);
+  });
+  it("rejects calendars with invalid internal rules", () => {
+    const tasks = [{ id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03", calendarId: "bad" }];
+    const invalid = validate({ calendars: {
+      bad: { workingDays: [] },
+      badHoliday: { holidays: ["not-a-date"] },
+      badException: { exceptions: [{ date: "2026-09-01", isWorkingDay: "yes" }] }
+    }, tasks });
+    expect(invalid.valid).toBe(false);
+    expect(invalid.errors.map((error) => error.path)).toEqual(expect.arrayContaining([
+      "calendars.bad.workingDays",
+      "calendars.badHoliday.holidays",
+      "calendars.badException.exceptions"
+    ]));
+    expect(validate({ calendars: { custom: { workingDays: [1, 2, 3, 4], holidays: ["2026-09-01"], exceptions: [{ date: "2026-09-05", isWorkingDay: true }] } }, tasks: [{ ...tasks[0], calendarId: "custom" }] }).valid).toBe(true);
+  });
+
+  it("validates the project target date", () => {
+    const tasks = [{ id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03" }];
+    expect(validate({ meta: { targetDate: "not-a-date" }, tasks }).errors.some((error) => error.path === "meta.targetDate")).toBe(true);
+    expect(validate({ meta: { targetDate: "2026-08-30" }, tasks }).valid).toBe(true);
+  });
+  it("rejects non-integer and non-finite structured dependency lags", () => {
+    const predecessor = { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03" };
+    const successor = { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03" };
+    const invalid = validate({ tasks: [predecessor, { ...successor, dependsOn: [{ id: "a", lag: 1.5 }, { id: "a", lagDays: Infinity }, { id: "a", lag: "2" }] }] });
+    expect(invalid.errors.map((error) => error.path)).toEqual(expect.arrayContaining([
+      "tasks[1].dependsOn[0].lag", "tasks[1].dependsOn[1].lagDays", "tasks[1].dependsOn[2].lag"
+    ]));
+    for (const lag of [-2, 0, 2]) {
+      expect(validate({ tasks: [predecessor, { ...successor, dependsOn: { id: "a", lag } }] }).valid).toBe(true);
+    }
+  });
+  it("validates long dependency chains and detects cycles without recursion overflow", () => {
+    const tasks = Array.from({ length: 12000 }, (_, i) => ({
+      id: `t${i}`, category: "dev", start: "2026-11-02", end: "2026-11-03",
+      ...(i ? { dependsOn: `t${i - 1}` } : {})
+    })).reverse();
+    expect(validate({ tasks }).valid).toBe(true);
+    tasks[tasks.length - 1].dependsOn = "t11999";
+    expect(validate({ tasks }).errors.some((error) => error.code === "CIRCULAR_DEPENDENCY")).toBe(true);
+  });
+  it("validates resource capacity and allocation values", () => {
+    const task = { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03", allocation: -1 };
+    const result = validate({ meta: { defaultResourceCapacity: -1, resourceCapacities: { alice: -0.5 } }, tasks: [task] });
+    expect(result.errors.map((error) => error.path)).toEqual(expect.arrayContaining(["meta.defaultResourceCapacity", "meta.resourceCapacities.alice", "tasks[0].allocation"]));
+    expect(validate({ meta: { defaultResourceCapacity: 0, resourceCapacities: { alice: 0.5 } }, tasks: [{ ...task, allocation: 0.5 }] }).valid).toBe(true);
+  });
   // ─── Valid fixture acceptance ──────────────────────────────────────────
 
   it("passes valid basic.json example", () => {

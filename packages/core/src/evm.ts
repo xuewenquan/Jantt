@@ -7,7 +7,7 @@
 
 import { Task, EVMResult, TaskEVMMetrics } from "./types";
 import { diffDays } from "./date-math";
-import { getTaskDependencies } from "./cpm";
+import { isTaskStartBlocked } from "./dependencies";
 import { isTaskDone } from "./utils";
 
 export interface EVMOptions {
@@ -107,16 +107,8 @@ export function calculateEVM(tasks: Task[], options?: EVMOptions): EVMResult {
       notStartedCount++;
     }
 
-    // Check if task is blocked (any prerequisite is not completed)
-    const depIds = getTaskDependencies(t);
-    let isBlocked = false;
-    for (const depId of depIds) {
-      const prereq = byId.get(depId);
-      if (prereq && !isTaskDone(prereq)) {
-        isBlocked = true;
-        break;
-      }
-    }
+    // Progress-only readiness; actual elapsed lag is not available here.
+    const isBlocked = !isDone && isTaskStartBlocked(t, byId, options?.defaultGapDays);
     if (isBlocked && !isDone) {
       blockedCount++;
     }

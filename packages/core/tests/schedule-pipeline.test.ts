@@ -7,8 +7,42 @@ import {
   CriticalPathStage
 } from "../src/pipeline";
 import { Task } from "../src/types";
+import { TaskScheduleCoordinator } from "../src/rendering/task-schedule-coordinator";
 
 describe("SchedulePipeline Assembly Line", () => {
+  it("reports an unknown calendar and stops without cascading dates", () => {
+    const tasks: Task[] = [
+      { id: "a", start: "2026-11-02", end: "2026-11-03", calendarId: "missing" },
+      { id: "b", start: "2026-11-02", end: "2026-11-03", dependsOn: "a" }
+    ];
+    const result = SchedulePipeline.createDefault({ includeCriticalPath: true }).execute(tasks);
+    expect(result.diagnostics.join(" ")).toMatch(/unknown calendar.*missing/i);
+    expect(result.tasks.map((task) => task.start)).toEqual(["2026-11-02", "2026-11-02"]);
+    expect(result.context.options?.cpmResult).toBeUndefined();
+    expect(result.context.fatalError).toMatch(/unknown calendar.*missing/i);
+    expect(() => TaskScheduleCoordinator.updateTask({ tasks }, { ...tasks[1], label: "changed" })).toThrow(/unknown calendar.*missing/i);
+  });
+
+  it("passes the project target date into the pipeline critical path", () => {
+    const tasks: Task[] = [{ id: "a", start: "2026-09-01", end: "2026-09-03" }];
+    const result = SchedulePipeline.createDefault({ includeCriticalPath: true }).execute(tasks, { targetDate: "2026-08-30" });
+    expect(result.context.options?.cpmResult.projectTotalFloat).toBeLessThan(0);
+  });
+
+  it("does not flag a locked task on a non-working day as a dependency violation", () => {
+    const tasks: Task[] = [{ id: "a", start: "2026-11-07", end: "2026-11-07", locked: true }];
+    const result = SchedulePipeline.createDefault().execute(tasks, { calendar: "standard" });
+    expect(result.diagnostics.join(" ")).not.toMatch(/violates a dependency constraint/i);
+  });
+  it("preserves relationship type and lag when removing a dangling dependency", () => {
+    const tasks: Task[] = [
+      { id: "a", start: "2026-01-01", end: "2026-01-05" },
+      { id: "b", start: "2026-01-01", end: "2026-01-02", dependsOn: [{ id: "a", type: "SS", lag: 1 }, "missing:FS+3d"] }
+    ];
+    const result = SchedulePipeline.createDefault().execute(tasks, { defaultGapDays: 2 });
+    expect(result.tasks[1].dependsOn).toEqual({ id: "a", type: "SS", lag: 1 });
+    expect(result.tasks[1].start).toBe("2026-01-02");
+  });
   it("SanitizeStage corrects inverted dates and removes self/dangling dependencies", () => {
     const stage = new SanitizeStage();
     const tasks: Task[] = [
@@ -44,6 +78,7 @@ describe("SchedulePipeline Assembly Line", () => {
     expect(sanitized[1].dependsOn).toBeNull();
     // Diagnostic recorded
     expect(ctx.diagnostics.length).toBeGreaterThan(0);
+    expect(ctx.diagnostics.some((message) => message.includes("Removed invalid dependencies"))).toBe(true);
   });
 
   it("CycleGuardStage detects dependency loops", () => {
@@ -57,6 +92,24 @@ describe("SchedulePipeline Assembly Line", () => {
     stage.process(cyclicTasks, ctx);
 
     expect(ctx.diagnostics.some((d) => d.includes("Circular dependency"))).toBe(true);
+  });
+
+  it("does not cascade a cyclic graph and reports locked constraint violations", () => {
+    const stage = new CascadeResolveStage();
+    const cyclic: Task[] = [
+      { id: "a", start: "2026-01-01", end: "2026-01-02", dependsOn: "b" },
+      { id: "b", start: "2026-01-01", end: "2026-01-02", dependsOn: "a" }
+    ];
+    const context = { defaultGapDays: 1, diagnostics: [] as string[] };
+    expect(stage.process(cyclic, context)).toEqual(cyclic);
+    expect(context.diagnostics[0]).toMatch(/circular/i);
+    const locked: Task[] = [
+      { id: "a", start: "2026-01-01", end: "2026-01-05" },
+      { id: "b", start: "2026-01-02", end: "2026-01-03", dependsOn: "a", locked: true }
+    ];
+    const lockedContext = { defaultGapDays: 0, diagnostics: [] as string[] };
+    expect(stage.process(locked, lockedContext)[1].start).toBe("2026-01-02");
+    expect(lockedContext.diagnostics[0]).toMatch(/locked.*violates/i);
   });
 
   it("CascadeResolveStage shifts downstream tasks while respecting gap days and locked flags", () => {

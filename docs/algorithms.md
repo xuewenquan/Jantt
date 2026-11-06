@@ -6,50 +6,46 @@ This document outlines the core scheduling, graph traversal, and coordinate rout
 
 ## 1. Schedule Cascade & Constraint Resolver
 
-The schedule resolver (`resolveSchedule`) operates as a multi-pass topological relaxation solver that ensures all dependency timing constraints and category pacing rules are satisfied while strictly preserving task durations.
+`resolveSchedule` moves tasks forward to satisfy all their dependency constraints while preserving their duration. For a predecessor P and successor S, the four relationships require the following, with the relationship's lag added to the predecessor date:
 
-### Pacing Constraints
+| Type | Constraint |
+| --- | --- |
+| FS | S.start ≥ P.finish + lag |
+| SS | S.start ≥ P.start + lag |
+| FF | S.finish ≥ P.finish + lag |
+| SF | S.finish ≥ P.start + lag |
 
-1. **Explicit Dependency Constraint**:
-   For any task $T$ with prerequisite $P = \text{dependsOn}(T)$:
-   $$\text{minStart}(T) = P.\text{end} + \text{gapDays}(T)$$
-   If $T.\text{start} < \text{minStart}(T)$, $T.\text{start}$ is adjusted to $\text{minStart}(T)$, and $T.\text{end}$ is shifted to maintain duration:
-   $$T.\text{end} = T.\text{start} + \text{duration}(T)$$
+Each relationship has its own lag. An explicit zero lag remains zero; an omitted lag uses the successor's effective gap. Positive lag delays the successor and negative lag is a lead. With no working calendar, dates and durations use calendar days. When a calendar is active, task duration and float use the task's calendar and relationship lag uses the successor's calendar. Task starts are moved to the next working day. Task calendars take precedence over assignee calendars, which take precedence over the project calendar. Explicit holidays and calendar exceptions are respected. A zero-lag FS relationship permits the successor to start on the predecessor's finish date, subject to the successor calendar. Working-day differences count whole weeks arithmetically when the calendar has no holidays, exceptions, or region; calendars with date-specific exceptions scan at most 100,000 days, and `addWorkingDays` stops after 200,000 day steps, raising a `CalendarError` instead of returning a partial result.
 
-2. **Implicit Category Pacing Constraint**:
-   Tasks within the same category that do not have an explicit `dependsOn` link are sorted chronologically by their initial start date. Each subsequent task $T_i$ is paced after $T_{i-1}$:
-   $$T_i.\text{start} \ge T_{i-1}.\text{end} + \text{defaultGapDays}$$
+An explicit calendar reference must name a built-in preset or a calendar in the project; unknown references produce a validation or calculation error rather than silently using another calendar. Calendar definitions are validated too: `workingDays` must be a non-empty array of weekday numbers from 0 to 6, and holidays and exceptions need valid ISO dates.
 
-3. **Locked Tasks**:
-   Tasks with `locked: true` are fixed reference anchors; their `start` and `end` dates are never mutated.
-
----
+Locked tasks do not move. Pipeline diagnostics report locked tasks whose dependency constraints cannot be satisfied; a locked task that only starts on a non-working day is not treated as a dependency violation. Cyclic graphs are not cascaded and CPM returns an error rather than a calculated critical path. Missing dependencies are ignored by the resolver; the pipeline sanitizes them while preserving the remaining relationships.
 
 ## 2. Critical Path Analysis
 
-The critical path is the continuous sequence of dependent tasks with **zero total float (slack)** that directly determines the earliest possible project completion date.
+`calculateCriticalPath` applies the same four relationship constraints and calendar rules in forward and backward passes. It treats each input start as a not-before date. The project early finish is the latest early finish of all tasks. The backward pass uses the target date when supplied, otherwise the early finish, and accounts for each successor constraint. Set `meta.targetDate` to use the same target in the chart, resource leveling, and project report. In mixed calendars the latest feasible predecessor date is found by inverting the actual date constraint, rather than assuming that adding and subtracting working days are reversible.
 
-### Formulation
+Critical task and dependency sets cover the whole graph. To prevent exponential memory and runtime growth in heavily branching graphs, at most 1,000 explicit paths are returned by default; `maxCriticalPaths` changes that limit and `criticalPathsTruncated` reports when additional paths exist.
 
-1. **Forward Pass (Early Dates)**:
-   - Early Start ($ES$) and Early Finish ($EF$):
-     $$ES(T) = \max_{P \in \text{Prereqs}(T)} \left( EF(P) + \text{gap}(P, T) \right)$$
-     $$EF(T) = ES(T) + \text{duration}(T)$$
-   - Project Completion Time:
-     $$T_{\max} = \max_{T} EF(T)$$
+For relationship-level highlighting, test `criticalRelationKeys` with `dependencyRelationKey(predecessorId, successorId, relation)`, where `relation` comes from `getTaskDependencyRelations`. The legacy `criticalDepKeys` uses `from->to` strings: it cannot distinguish parallel relationships and can collide when IDs contain `->`. `calculateCriticalPath` returns an empty `criticalRelationKeys` set for an empty graph or an error; check `errors` before interpreting the result.
 
-2. **Backward Pass (Late Dates)**:
-   - For terminal tasks (tasks with no successors):
-     $$LF(T) = T_{\max}$$
-   - For predecessor tasks:
-     $$LF(T) = \min_{S \in \text{Successors}(T)} \left( LS(S) - \text{gap}(T, S) \right)$$
-     $$LS(T) = LF(T) - \text{duration}(T)$$
+Total float measures the difference between early and late starts in the task's working days, or calendar days when no calendar is active. Free float measures how far the task can move without delaying any successor or the project early finish; it is independent of a later contractual target. Critical and near-critical tasks and driving links are derived from these calculations.
 
-3. **Total Float (Slack)**:
-   $$\text{Slack}(T) = LS(T) - ES(T) = LF(T) - EF(T)$$
+Readiness indicators use recorded predecessor progress: FS requires a finished predecessor and SS requires a started predecessor; FF and SF constrain finishing rather than starting. Relationships with a negative lag are not treated as start blockers. These indicators do not determine whether a positive lag has elapsed because actual event dates are not recorded, so they are not a substitute for checking lag timing.
 
-4. **Critical Set**:
-   $$\text{CriticalTasks} = \{ T \mid \text{Slack}(T) \le 0 \lor T.\text{end} = T_{\max} \}$$
+## Resource allocation and leveling
+
+Allocation detection adds each assigned task's units on active dates and compares the sum with the resource capacity. Task endpoints are inclusive for allocation; non-working dates are excluded when the task has an active calendar. A person's own calendar sets their capacity to zero on non-working dates, even when a task uses a different calendar. A single task can exceed capacity. Known person IDs and names are grouped as one resource; lookup matches the ID exactly, then the trimmed name case-insensitively. The leveling heuristic delays lower-priority tasks, respects calendars and dependencies, and checks locked successors before accepting a move. For an individually assigned task on an unavailable resource, it searches up to 366 task-calendar days plus seven days for each explicit resource holiday or exception for an uninterrupted slot. Tasks are not split. Unresolved conflicts do not prevent the engine from attempting other conflicts; remaining overloads and reasons are returned. The heuristic does not guarantee finding a feasible schedule even when one exists, or finding an optimal schedule.
+
+Use `task.allocation` for demand and `meta.defaultResourceCapacity` or `meta.resourceCapacities` (keyed by person ID or name) for capacity. The unit `1` means 100%. The resource preview and worker client read these settings from project JSON; explicit worker options override them.
+
+For overlapping tasks, the leveler searches forward for a resource-capacity slot before cascading successors. It can use non-working dates within an overlapping task's calendar instead of always waiting for that task to finish. A move that recreates the same two-task conflict through cascading is rejected. When future bookings prevent a constrained task from moving without violating a locked successor, the leveler tries moving one or two bookings after it and rechecks all locked dependencies; at most 256 pairs are attempted. The default pass limit is twice the task count, bounded between 50 and 1,000; callers can set `maxIterations`, and any unresolved overloads are returned.
+A move that introduces a new conflict with a locked booking is accepted only when the conflicting flexible task can be shifted past that booking into a schedule that still satisfies every locked dependency; otherwise another candidate is tried. Repeated conflicts favor a different movable task to reduce cascading loops. These rules remain heuristic and can themselves rule out a feasible sequence of moves.
+
+Project JSON retains calendar definitions and holiday exceptions. The current Microsoft Project XML, Primavera XER, and CSV converters preserve effective dependency types and lags but do not transfer calendars or holiday definitions; use JSON when those settings must survive export and import. Microsoft Project XML import assigns new task IDs from XML UIDs and reconnects dependencies to those IDs.
+
+CSV uses ordinary dependency expressions for IDs without commas or semicolons. If an ID contains either delimiter, its dependency field uses a `json:`-prefixed JSON array so Jantt can restore it without splitting the ID; other CSV consumers may need to handle this representation explicitly.
+CSV also retains each task's assignee and allocation units in separate columns. Resource capacity settings and people records are not transferred; use JSON to retain them.
 
 ---
 

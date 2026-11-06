@@ -9,6 +9,42 @@ import {
 } from "../src";
 
 describe("EVM (Earned Value Management) Engine - ANSI/EIA-748", () => {
+  it.each([
+    ["FS", 0, 0.5, true], ["FS", 0, 1, false],
+    ["SS", 0, 0, true], ["SS", 0, 0.5, false],
+    ["FF", 0, 0, false], ["SF", 0, 0, false], ["FS", -1, 0, false]
+  ] as const)("uses %s relationship and recorded progress to assess starting", (type, lag, progress, blocked) => {
+    const tasks: Task[] = [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-04", progress },
+      { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-05", dependsOn: [{ id: "a", type, lagDays: lag }] }
+    ];
+    expect(calculateEVM(tasks).taskMetrics.get("b")?.isBlocked).toBe(blocked);
+  });
+  it.each([
+    ["FS", 0, 0.5, 0.5, true],
+    ["SS", 0, 0, 0.5, true],
+    ["FF", 0, 0, 0.5, false],
+    ["SF", 0, 0, 0.5, false],
+    ["FF", 0, 0.5, 1, true],
+    ["SF", 0, 0, 1, true],
+    ["FS", -2, 0, 0.5, false]
+  ] as const)("checks %s progress with lag %s without treating every relationship as FS", (type, lag, predecessorProgress, successorProgress, expectedIssue) => {
+    const tasks: Task[] = [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-04", progress: predecessorProgress },
+      { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-05", progress: successorProgress, dependsOn: [{ id: "a", type, lagDays: lag }] }
+    ];
+    const audit = auditScheduleIntegrity(tasks, calculateCriticalPath(tasks));
+    expect(audit.issues.some((issue) => issue.type === "out-of-sequence")).toBe(expectedIssue);
+  });
+  it("rejects invalid CPM results instead of reporting an audit or PERT score", () => {
+    const tasks: Task[] = [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "b" },
+      { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "a" }
+    ];
+    const result = calculateCriticalPath(tasks);
+    expect(() => auditScheduleIntegrity(tasks, result)).toThrow(/circular/i);
+    expect(() => calculatePertRisk(tasks, result)).toThrow(/circular/i);
+  });
   it("calculates classical EVM metrics accurately", () => {
     // Project status date is 2026-09-15
     const tasks: Task[] = [

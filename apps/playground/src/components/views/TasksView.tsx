@@ -18,12 +18,14 @@ import {
   resolveTaskAssignee,
   resolveTeamById,
   resolveSchedule,
+  getScheduleContext,
   syncTaskProgressAndStatus,
   isTaskDone,
-  getTaskDependencies
+  filterDependencies
 } from "@jantt/core";
 import type { DateFilterMode, CompletedFilterMode, EffectivePerson } from "../../types";
 import { isTaskMatchingPersonFilter, sortTasksByAssignee } from "../../utils";
+import { ResourceLevelingPanel } from "./ResourceLevelingPanel";
 
 interface TasksViewProps {
   parsedData: JanttData;
@@ -69,6 +71,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   onPromptFork
 }) => {
   const activeTasks = (parsedData.tasks || []).filter((t) => !t._deleted);
+  const [showResourceLeveling, setShowResourceLeveling] = React.useState(false);
   const matchingDateFilterTasks = activeTasks.filter(isTaskMatchingDateFilter);
 
   const handleDeleteTask = React.useCallback(
@@ -78,19 +81,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
         return;
       }
       const active = (parsedData.tasks || []).filter((item) => item.id !== taskIdToDelete && !item._deleted);
-      const pruned = active.map((item) => {
-        const remaining = getTaskDependencies(item).filter((id) => id !== taskIdToDelete);
-        return {
-          ...item,
-          dependsOn: remaining.length === 0 ? null : (remaining.length === 1 ? remaining[0] : remaining)
-        };
-      });
+      const pruned = active.map((item) => ({ ...item, dependsOn: filterDependencies(item.dependsOn, (id) => id !== taskIdToDelete) }));
       const nowIso = new Date().toISOString();
       const tombstones = {
         ...(parsedData.meta?.tombstones || {}),
         [taskIdToDelete]: { deletedAt: nowIso, entityType: "task" }
       };
-      const resolved = resolveSchedule(pruned, parsedData.meta?.defaultGapDays ?? 2);
+      const resolved = resolveSchedule(pruned, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
       handleChartCommit({
         ...parsedData,
         meta: {
@@ -123,6 +120,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
         </div>
 
         <div className="tasks-view-toolbar">
+          <button type="button" className="btn-nav" onClick={() => setShowResourceLeveling((shown) => !shown)} aria-expanded={showResourceLeveling}>
+            Resource leveling
+          </button>
           {/* Search Filter */}
           <div className="tasks-search-wrap">
             <input
@@ -217,6 +217,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
           </button>
         </div>
       </div>
+
+      {showResourceLeveling && <ResourceLevelingPanel data={parsedData} onCommit={handleChartCommit} readOnly={isViewer} onPromptFork={onPromptFork} />}
 
       {/* Tasks Content: Checklist or Cards */}
       {(() => {

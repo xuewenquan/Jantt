@@ -20,9 +20,10 @@ import {
   resolveTaskAssignee,
   isTaskDone,
   calculateCriticalPath,
+  DEFAULT_GAP_DAYS,
   calculateEVM,
   auditScheduleIntegrity,
-  getTaskDependencies
+  isTaskStartBlocked
 } from "@jantt/core";
 import type { SummarySortConfig, CompletedFilterMode, EffectivePerson } from "../../types";
 import { isTaskMatchingPersonFilter } from "../../utils";
@@ -73,9 +74,13 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
   const cpm = useMemo(() => {
     return calculateCriticalPath(allProjectTasks, {
       targetDate: parsedData.meta?.targetDate as string | undefined,
-      defaultGapDays: parsedData.meta?.defaultGapDays
+      defaultGapDays: parsedData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS,
+      calendar: parsedData.meta?.calendar,
+      useWorkingDays: parsedData.meta?.useWorkingDays,
+      calendars: parsedData.calendars,
+      people: parsedData.people
     });
-  }, [allProjectTasks, parsedData.meta?.targetDate, parsedData.meta?.defaultGapDays]);
+  }, [allProjectTasks, parsedData.meta?.targetDate, parsedData.meta?.defaultGapDays, parsedData.meta?.calendar, parsedData.meta?.useWorkingDays, parsedData.calendars, parsedData.people]);
 
   const evm = useMemo(() => {
     return calculateEVM(allProjectTasks, {
@@ -84,15 +89,15 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
   }, [allProjectTasks, parsedData.meta?.defaultGapDays]);
 
   const audit = useMemo(() => {
-    return auditScheduleIntegrity(allProjectTasks, cpm);
+    return cpm.errors?.length ? null : auditScheduleIntegrity(allProjectTasks, cpm);
   }, [allProjectTasks, cpm]);
 
   // Tasks ready to start (not done, and all prerequisites are 100% completed)
   const byId = useMemo(() => {
     const map = new Map<string, Task>();
-    summaryKpiTasks.forEach((t) => map.set(t.id, t));
+    allProjectTasks.forEach((t) => map.set(t.id, t));
     return map;
-  }, [summaryKpiTasks]);
+  }, [allProjectTasks]);
 
   const { readyTaskIds, blockedTaskIds } = useMemo(() => {
     const ready = new Set<string>();
@@ -100,28 +105,12 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
 
     summaryKpiTasks.forEach((t) => {
       if (isTaskDone(t)) return;
-      const deps = getTaskDependencies(t);
-      if (deps.length === 0) {
-        ready.add(t.id);
-        return;
-      }
-      let allPrereqsDone = true;
-      for (const dId of deps) {
-        const prereq = byId.get(dId);
-        if (!prereq || !isTaskDone(prereq)) {
-          allPrereqsDone = false;
-          break;
-        }
-      }
-      if (allPrereqsDone) {
-        ready.add(t.id);
-      } else {
-        blocked.add(t.id);
-      }
+      if (isTaskStartBlocked(t, byId, parsedData.meta?.defaultGapDays)) blocked.add(t.id);
+      else ready.add(t.id);
     });
 
     return { readyTaskIds: ready, blockedTaskIds: blocked };
-  }, [summaryKpiTasks, byId]);
+  }, [summaryKpiTasks, byId, parsedData.meta?.defaultGapDays]);
 
   // Handle local buffer/float sorting and quick filtering
   const displayTasks = useMemo(() => {
@@ -150,6 +139,13 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
 
     return tasks;
   }, [sortedSummaryTasks, summarySortConfig, cpm, quickFilter, completedFilterMode, readyTaskIds, blockedTaskIds]);
+
+  if (!audit) {
+    return <div className="summary-view-container" role="alert">
+      <strong>Schedule analysis unavailable</strong>
+      {cpm.errors?.map((error) => <p key={error}>{error}</p>)}
+    </div>;
+  }
 
   return (
     <div className="summary-view-container">
@@ -295,7 +291,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
               </div>
             </div>
 
-            {/* Card 4: Bottleneck Tasks (Zero Buffer) */}
+            {/* Card 4: Critical tasks */}
             <div className="summary-kpi-card">
               <div className="kpi-icon-wrap" style={{ color: "var(--jantt-critical, #EF4444)" }}>
                 <Layers size={20} />
@@ -306,7 +302,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
                   {cpm.criticalTaskIds.size} Tasks
                 </span>
                 <span style={{ fontSize: "11px", color: "var(--jantt-text-muted)", marginTop: "2px" }}>
-                  Zero buffer (delaying these delays project)
+                  Critical tasks with the least or nonpositive float
                 </span>
               </div>
             </div>
@@ -363,7 +359,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
               }}
             >
               <PlayCircle size={12} />
-              <span>Ready to Start ({readyTaskIds.size})</span>
+              <span>Start prerequisites clear ({readyTaskIds.size})</span>
             </button>
             <button
               onClick={() => setQuickFilter("blocked")}
@@ -543,7 +539,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
                       )}
                       {isReady && !isCrit && (
                         <span
-                          title="Ready: All prerequisites are done, can start now"
+                          title="No unmet start prerequisite based on recorded progress; verify lag timing separately"
                           style={{
                             fontSize: "9px",
                             fontWeight: 700,
@@ -554,7 +550,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
                             border: "1px solid #10B98140"
                           }}
                         >
-                          Ready
+                          Prereqs clear
                         </span>
                       )}
                       {isBlocked && (
@@ -623,7 +619,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
                   <td style={{ fontFamily: "var(--jantt-font-mono)", fontSize: "11px" }}>{t.end}</td>
                   <td>
                     <span
-                      title={viewMode === "essential" ? `Can slip by ${tf} days without delaying the project deadline` : `Total Float: ${tf}d, Free Float: ${ff}d`}
+                      title={viewMode === "essential" ? `Total float: ${tf} days relative to the project deadline` : `Total Float: ${tf}d, Free Float: ${ff}d`}
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
@@ -634,7 +630,7 @@ export const BudgetKpiView: React.FC<BudgetKpiViewProps> = ({
                         color: isCrit ? "var(--jantt-critical, #EF4444)" : tf < 0 ? "#EF4444" : isNearCrit ? "#F59E0B" : "#10B981"
                       }}
                     >
-                      {isCrit ? "0d (Bottleneck)" : tf < 0 ? `Overdue ${tf}d` : `${tf}d buffer`}
+                      {isCrit ? `${tf}d (Bottleneck)` : tf < 0 ? `Overdue ${tf}d` : `${tf}d buffer`}
                     </span>
                   </td>
                   <td style={{ fontFamily: "var(--jantt-font-mono)" }}>

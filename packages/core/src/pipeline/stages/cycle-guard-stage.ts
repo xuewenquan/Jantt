@@ -37,8 +37,8 @@ export class CycleGuardStage implements IPipelineStage<Task[], Task[]> {
     });
 
     let visited = 0;
-    while (queue.length > 0) {
-      const curr = queue.shift()!;
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
+      const curr = queue[queueIndex];
       visited++;
       const successors = adj.get(curr) || [];
       for (const s of successors) {

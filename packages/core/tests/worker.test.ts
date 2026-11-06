@@ -21,6 +21,20 @@ describe("ScheduleWorkerClient", () => {
     client.terminate();
   });
 
+  it("uses the project calendar in asynchronous scheduling", async () => {
+    const client = createScheduleWorkerClient();
+    const plan: JanttData = {
+      meta: { calendar: "standard", defaultGapDays: 1 },
+      tasks: [
+        { id: "a", start: "2026-11-04", end: "2026-11-06" },
+        { id: "b", start: "2026-11-04", end: "2026-11-05", dependsOn: "a" }
+      ]
+    };
+    const resolved = await client.resolveSchedule(plan) as JanttData;
+    expect(resolved.tasks[1].start).toBe("2026-11-09");
+    client.terminate();
+  });
+
   it("executes Monte Carlo schedule simulation asynchronously", async () => {
     const client = createScheduleWorkerClient();
     const result = await client.runMonteCarlo(samplePlan, { iterations: 100 });
@@ -43,6 +57,27 @@ describe("ScheduleWorkerClient", () => {
     const result = await client.levelResources(overAllocatedPlan);
     expect(result.tasks).toHaveLength(2);
     expect(result.adjustments.length).toBeGreaterThanOrEqual(1);
+    client.terminate();
+  });
+
+  it("uses resource capacities from project metadata", async () => {
+    const client = createScheduleWorkerClient();
+    const plan: JanttData = { meta: { resourceCapacities: { alice: 0.5 } }, tasks: [
+      { id: "a", category: "dev", assignee: "alice", allocation: 0.75, start: "2026-11-02", end: "2026-11-02" }
+    ] };
+    const result = await client.levelResources(plan);
+    expect(result.remainingOverallocations[0]).toMatchObject({ resourceId: "alice", capacity: 0.5, totalUnits: 0.75 });
+    client.terminate();
+  });
+
+  it("uses the project target date for resource leveling float", async () => {
+    const client = createScheduleWorkerClient();
+    const plan: JanttData = { meta: { targetDate: "2026-11-10", defaultGapDays: 1 }, tasks: [
+      { id: "a", assignee: "alice", start: "2026-11-02", end: "2026-11-02", locked: true },
+      { id: "b", assignee: "alice", start: "2026-11-02", end: "2026-11-02" }
+    ] };
+    const result = await client.levelResources(plan);
+    expect(result.adjustments[0].withinFloat).toBe(true);
     client.terminate();
   });
 

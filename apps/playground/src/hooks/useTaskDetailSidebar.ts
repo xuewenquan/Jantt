@@ -5,7 +5,8 @@ import {
   type ThemeDefinition,
   createTaskSidebar,
   resolveSchedule,
-  getTaskDependencies
+  getScheduleContext,
+  filterDependencies
 } from "@jantt/core";
 import type { ActiveView } from "../types";
 
@@ -63,6 +64,8 @@ export function useTaskDetailSidebar({
       const sidebarInstance = createTaskSidebar({
         task,
         allTasks: parsedDataRef.current.tasks,
+        defaultGapDays: parsedDataRef.current.meta?.defaultGapDays,
+        scheduleContext: getScheduleContext(parsedDataRef.current),
         categories: parsedDataRef.current.categories || {},
         theme: activeThemeRef.current.vars,
         themeClassName: activeThemeRef.current.className,
@@ -80,7 +83,7 @@ export function useTaskDetailSidebar({
           const nextTasks = currentData.tasks.map((t) =>
             t.id === updatedTask.id ? updatedTask : t
           );
-          const resolved = resolveSchedule(nextTasks, currentData.meta?.defaultGapDays ?? 2);
+          const resolved = resolveSchedule(nextTasks, currentData.meta?.defaultGapDays ?? 2, getScheduleContext(currentData));
           handleChartCommit({ ...currentData, tasks: resolved });
         },
         onDelete: (taskId) => {
@@ -90,18 +93,8 @@ export function useTaskDetailSidebar({
           }
           const currentData = parsedDataRef.current;
           if (!currentData) return;
-          const nextTasks = currentData.tasks.filter((t) => t.id !== taskId);
-          nextTasks.forEach((t) => {
-            const remaining = getTaskDependencies(t).filter((id) => id !== taskId);
-            if (remaining.length === 0) {
-              t.dependsOn = null;
-            } else if (remaining.length === 1) {
-              t.dependsOn = remaining[0];
-            } else {
-              t.dependsOn = remaining;
-            }
-          });
-          const resolved = resolveSchedule(nextTasks, currentData.meta?.defaultGapDays ?? 2);
+          const nextTasks = currentData.tasks.filter((t) => t.id !== taskId).map((t) => ({ ...t, dependsOn: filterDependencies(t.dependsOn, (id) => id !== taskId) }));
+          const resolved = resolveSchedule(nextTasks, currentData.meta?.defaultGapDays ?? 2, getScheduleContext(currentData));
           handleChartCommit({ ...currentData, tasks: resolved });
         }
       });

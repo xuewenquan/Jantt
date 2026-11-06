@@ -15,8 +15,14 @@ export class CriticalPathStage implements IPipelineStage<Task[], Task[]> {
 
     const cpmResult: CriticalPathResult = calculateCriticalPath(tasks, {
       defaultGapDays: context.defaultGapDays,
+      calendar: context.calendar,
+      calendars: context.calendars,
+      people: context.people,
+      useWorkingDays: context.useWorkingDays,
+      targetDate: context.targetDate,
       ...context.options?.cpmOptions
     });
+    context.diagnostics?.push(...(cpmResult.errors || []));
 
     if (!context.options) {
       context.options = {};

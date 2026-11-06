@@ -1,6 +1,9 @@
 import { Task, Category, CategoriesMap } from "./types";
-import { diffDays, addDays } from "./date-math";
-import { getTaskDependencies } from "./resolver";
+import { diffDays } from "./date-math";
+import { hasDependencyCycle, resolveDependencySubgraph, resolveSchedule } from "./resolver";
+import { formatDependency, getTaskDependencyRelations, type DependencyRelation, type DependencyType } from "./dependencies";
+import type { PipelineContext } from "./pipeline/contracts";
+import { DEFAULT_GAP_DAYS } from "./constants";
 import { escapeHtml, syncTaskProgressAndStatus } from "./utils";
 
 export interface TaskSidebarOptions {
@@ -11,6 +14,8 @@ export interface TaskSidebarOptions {
   theme?: Record<string, string>;
   themeClassName?: string;
   readOnly?: boolean;
+  defaultGapDays?: number;
+  scheduleContext?: Omit<PipelineContext, "defaultGapDays">;
   onSave: (updatedTask: Task) => void;
   onDelete?: (taskId: string) => void;
   onClose: () => void;
@@ -41,6 +46,8 @@ export function createTaskSidebar(options: TaskSidebarOptions): TaskSidebarInsta
     theme,
     themeClassName,
     readOnly = false,
+    defaultGapDays = DEFAULT_GAP_DAYS,
+    scheduleContext,
     onSave,
     onDelete,
     onClose,
@@ -116,6 +123,8 @@ export function createTaskSidebar(options: TaskSidebarOptions): TaskSidebarInsta
       allTasks,
       categories,
       readOnly,
+      defaultGapDays,
+      scheduleContext,
       (updated) => {
         currentTask = updated;
         onSave(updated);
@@ -149,6 +158,8 @@ function renderDefaultSidebarContent(
   allTasks: Task[],
   categories: CategoriesMap,
   readOnly: boolean,
+  defaultGapDays: number,
+  scheduleContext: Omit<PipelineContext, "defaultGapDays"> | undefined,
   onSave: (task: Task) => void,
   onDelete?: () => void,
   onClose?: () => void
@@ -162,7 +173,14 @@ function renderDefaultSidebarContent(
   const initialProgress = Math.round((task.progress || 0) * 100);
 
   // Active dependencies state
-  let currentDeps: string[] = getTaskDependencies(task);
+  let currentDeps: DependencyRelation[] = getTaskDependencyRelations(task);
+  let dependenciesChanged = false;
+  const selectedDependencies = () => {
+    if (!dependenciesChanged) return task.dependsOn;
+    if (!currentDeps.length) return null;
+    return currentDeps.map((rel) => ({ id: rel.id, type: rel.type,
+      ...(rel.lagDays !== 0 || rel.explicitZeroLag ? { lagDays: rel.lagDays } : {}) }));
+  };
 
   container.innerHTML = `
     <!-- Pull handle for mobile bottom sheet -->
@@ -282,6 +300,11 @@ function renderDefaultSidebarContent(
         </div>
       </div>
 
+      <div class="jantt-form-group">
+        <label class="jantt-form-label" for="jantt-sidebar-allocation">Resource allocation (%)</label>
+        <input type="number" id="jantt-sidebar-allocation" class="jantt-input" min="0" step="any" placeholder="${typeof task.fields?.allocation === "number" ? task.fields.allocation * 100 : 100}" value="${task.allocation !== undefined ? task.allocation * 100 : ""}" ${readOnly || task.locked ? "disabled" : ""} />
+      </div>
+
       <!-- WBS & Estimated Cost -->
       <div class="jantt-form-grid-2">
         <div class="jantt-form-group">
@@ -370,15 +393,17 @@ function renderDefaultSidebarContent(
           '<span style="font-size: 12px; color: var(--jantt-text-muted); font-style: italic;">None (Independent Task)</span>';
       } else {
         chipsContainer.innerHTML = currentDeps
-          .map((depId) => {
-            const prereq = allTasks.find((t) => t.id === depId);
-            const pLabel = prereq ? prereq.label || prereq.name || prereq.id : depId;
+          .map((rel, index) => {
+            const prereq = allTasks.find((t) => t.id === rel.id);
+            const pLabel = prereq ? prereq.label || prereq.name || prereq.id : rel.id;
             return `
             <span class="jantt-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11.5px; background: var(--jantt-surface-solid); border: 1px solid var(--jantt-border);">
-              <span>${escapeHtml(pLabel)} (#${escapeHtml(depId)})</span>
+              <span>${escapeHtml(pLabel)} (${escapeHtml(formatDependency(rel))})</span>
               ${
                 !readOnly && !task.locked
-                  ? `<button type="button" data-remove-dep="${escapeHtml(depId)}" style="background: none; border: none; color: var(--jantt-text-dim); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;" title="Remove dependency"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>`
+                  ? `<select data-dep-type="${index}" aria-label="Relationship type for ${escapeHtml(pLabel)}">${["FS", "SS", "FF", "SF"].map((type) => `<option value="${type}"${rel.type === type ? " selected" : ""}>${type}</option>`).join("")}</select>
+                     <input data-dep-lag="${index}" aria-label="Lag days for ${escapeHtml(pLabel)}" type="number" step="1" style="width: 64px;" placeholder="Default" value="${rel.lagDays !== 0 || rel.explicitZeroLag ? rel.lagDays : ""}" />
+                     <button type="button" data-remove-dep="${index}" style="background: none; border: none; color: var(--jantt-text-dim); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;" title="Remove dependency"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>`
                   : ""
               }
             </span>
@@ -389,8 +414,26 @@ function renderDefaultSidebarContent(
         // Attach remove buttons
         chipsContainer.querySelectorAll<HTMLButtonElement>("[data-remove-dep]").forEach((btn) => {
           btn.addEventListener("click", () => {
-            const targetDep = btn.dataset.removeDep!;
-            currentDeps = currentDeps.filter((d) => d !== targetDep);
+            const index = Number(btn.dataset.removeDep);
+            currentDeps.splice(index, 1);
+            dependenciesChanged = true;
+            checkConflictsAndRenderDeps();
+          });
+        });
+        chipsContainer.querySelectorAll<HTMLSelectElement>("[data-dep-type]").forEach((select) => {
+          select.addEventListener("change", () => {
+            currentDeps[Number(select.dataset.depType)].type = select.value as DependencyType;
+            dependenciesChanged = true;
+            checkConflictsAndRenderDeps();
+          });
+        });
+        chipsContainer.querySelectorAll<HTMLInputElement>("[data-dep-lag]").forEach((input) => {
+          input.addEventListener("change", () => {
+            const relation = currentDeps[Number(input.dataset.depLag)];
+            const value = input.value.trim();
+            relation.lagDays = value ? Math.trunc(Number(value)) : 0;
+            relation.explicitZeroLag = value !== "" && relation.lagDays === 0;
+            dependenciesChanged = true;
             checkConflictsAndRenderDeps();
           });
         });
@@ -399,7 +442,7 @@ function renderDefaultSidebarContent(
 
     // Refresh add dropdown options
     if (addSelect) {
-      const available = allTasks.filter((t) => t.id !== task.id && !currentDeps.includes(t.id));
+      const available = allTasks.filter((t) => t.id !== task.id);
       addSelect.innerHTML =
         '<option value="">+ Add Prerequisite Dependency...</option>' +
         available
@@ -413,26 +456,14 @@ function renderDefaultSidebarContent(
     // Check for start-date timing conflicts with any prerequisite
     if (conflictBox && startInput) {
       const curStart = startInput.value;
-      const conflicts: { depId: string; prereqEnd: string; prereqLabel: string }[] = [];
-
-      currentDeps.forEach((depId) => {
-        const prereq = allTasks.find((t) => t.id === depId);
-        if (prereq && prereq.end && curStart) {
-          const reqMinStart = addDays(prereq.end, task.gapDays ?? 0);
-          // Timing conflict: task start is earlier than prerequisite end + gap
-          if (diffDays(reqMinStart, curStart) < 0) {
-            conflicts.push({
-              depId,
-              prereqEnd: reqMinStart,
-              prereqLabel: prereq.label || prereq.name || prereq.id
-            });
-          }
-        }
-      });
-
-      if (conflicts.length > 0) {
+      const candidate = { ...task, start: curStart, end: endInput?.value || task.end, dependsOn: selectedDependencies(), locked: false };
+      // Only the candidate's transitive predecessors can affect its earliest
+      // start, so resolve that subgraph instead of the whole project.
+      const source = resolveDependencySubgraph(allTasks, [candidate]);
+      const adjusted = currentDeps.length && curStart ? resolveSchedule(source, defaultGapDays, scheduleContext).find((item) => item.id === task.id) : undefined;
+      if (adjusted && adjusted.start > curStart) {
         conflictBox.style.display = "block";
-        const latestEnd = conflicts.reduce((max, c) => (diffDays(max, c.prereqEnd) > 0 ? c.prereqEnd : max), conflicts[0].prereqEnd);
+        const latestEnd = adjusted.start;
         conflictBox.innerHTML = `
           <div style="background: rgba(244, 63, 94, 0.12); border-left: 3px solid #F43F5E; padding: 8px 12px; border-radius: 6px; font-size: 11.5px; margin-top: 4px;">
             <div style="color: #F43F5E; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
@@ -440,7 +471,7 @@ function renderDefaultSidebarContent(
               Dependency Timing Conflict:
             </div>
             <div style="color: var(--jantt-text-muted);">
-              Starts on <strong>${curStart}</strong> before prerequisite finish (${latestEnd}).
+              Starts on <strong>${curStart}</strong> before the dependency constraints allow (${latestEnd}).
             </div>
             ${
               !readOnly && !task.locked
@@ -452,9 +483,8 @@ function renderDefaultSidebarContent(
 
         conflictBox.querySelector("#jantt-sidebar-align-btn")?.addEventListener("click", () => {
           if (startInput && endInput) {
-            const oldSpan = Math.max(diffDays(startInput.value, endInput.value), 0);
             startInput.value = latestEnd;
-            endInput.value = addDays(latestEnd, oldSpan);
+            endInput.value = adjusted.end;
             updateDuration();
             checkConflictsAndRenderDeps();
           }
@@ -470,8 +500,9 @@ function renderDefaultSidebarContent(
   const addSelect = container.querySelector<HTMLSelectElement>("#jantt-sidebar-add-dep-select");
   addSelect?.addEventListener("change", (e) => {
     const val = (e.target as HTMLSelectElement).value;
-    if (val && !currentDeps.includes(val)) {
-      currentDeps.push(val);
+    if (val && !currentDeps.some((relation) => relation.id === val && relation.type === "FS" && relation.lagDays === 0 && !relation.explicitZeroLag)) {
+      currentDeps.push({ id: val, type: "FS", lagDays: 0 });
+      dependenciesChanged = true;
       checkConflictsAndRenderDeps();
     }
   });
@@ -649,6 +680,12 @@ function renderDefaultSidebarContent(
     const end = endInput?.value || task.end;
     const status = (container.querySelector("#jantt-sidebar-status") as HTMLSelectElement)?.value || task.status;
     const assignee = (container.querySelector("#jantt-sidebar-assignee") as HTMLInputElement)?.value || undefined;
+    const allocationText = (container.querySelector("#jantt-sidebar-allocation") as HTMLInputElement)?.value.trim() || "";
+    const allocation = allocationText ? Number(allocationText) / 100 : undefined;
+    if (allocation !== undefined && (!Number.isFinite(allocation) || allocation < 0)) {
+      if (conflictBox) { conflictBox.style.display = "block"; conflictBox.textContent = "Resource allocation must be a non-negative number."; }
+      return;
+    }
     const priority = (container.querySelector("#jantt-sidebar-priority") as HTMLSelectElement)?.value || undefined;
     const wbs = (container.querySelector("#jantt-sidebar-wbs") as HTMLInputElement)?.value || undefined;
     const costVal = (container.querySelector("#jantt-sidebar-cost") as HTMLInputElement)?.value;
@@ -660,8 +697,7 @@ function renderDefaultSidebarContent(
     // Collect custom fields
     const updatedFields: Record<string, unknown> = { ...currentFields };
 
-    const finalDependsOn: string | string[] | null =
-      currentDeps.length === 0 ? null : currentDeps.length === 1 ? currentDeps[0] : currentDeps;
+    const finalDependsOn = selectedDependencies();
 
     const updatedTask: Task = {
       ...task,
@@ -672,6 +708,7 @@ function renderDefaultSidebarContent(
       end,
       status: syncedStatusProg.status || status,
       assignee,
+      allocation,
       priority,
       wbs,
       estimatedCost,
@@ -680,6 +717,14 @@ function renderDefaultSidebarContent(
       notes,
       fields: Object.keys(updatedFields).length > 0 ? updatedFields : undefined
     };
+
+    if (hasDependencyCycle([...allTasks.filter((item) => item.id !== task.id), updatedTask])) {
+      if (conflictBox) {
+        conflictBox.style.display = "block";
+        conflictBox.textContent = "Cannot save: these dependencies create a circular dependency.";
+      }
+      return;
+    }
 
     onSave(updatedTask);
   });

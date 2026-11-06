@@ -5,13 +5,14 @@ export interface DependencyLinksProps {
   canvasWidth: number;
   canvasHeight: number;
   showCritical: boolean;
-  onLinkDelete?: (fromTaskId: string, toTaskId: string) => void;
+  canDelete?: (dependency: DependencyLine) => boolean;
+  onLinkDelete?: (fromTaskId: string, toTaskId: string, relationshipIndex?: number) => void;
 }
 
 export interface DependencyLinksResult {
   svg: SVGSVGElement;
   previewWireSvg: SVGPathElement;
-  depPathElements: Map<string, SVGPathElement>;
+  depPathElements: Map<DependencyLine, SVGPathElement>;
 }
 
 let linkInstanceCounter = 0;
@@ -58,12 +59,16 @@ export function renderDependencyLinks(props: DependencyLinksProps): DependencyLi
   previewWireSvg.setAttribute("class", "jantt-link-preview-line");
   svg.appendChild(previewWireSvg);
 
-  const depPathElements = new Map<string, SVGPathElement>();
+  const depPathElements = new Map<DependencyLine, SVGPathElement>();
 
-  props.dependencies.forEach((dep) => {
+  const orderedDependencies = props.showCritical ? [...props.dependencies].sort((a, b) => Number(a.isCritical) - Number(b.isCritical)) : props.dependencies;
+  orderedDependencies.forEach((dep) => {
     const isCrit = props.showCritical && dep.isCritical;
     const normalMarker = isCrit ? `url(#${arrowCriticalId})` : `url(#${arrowId})`;
     const activeMarker = `url(#${arrowActiveId})`;
+    const canDelete = Boolean(props.onLinkDelete && (props.canDelete?.(dep) ?? true));
+    const lag = dep.lagDays === undefined ? "" : ` ${dep.lagDays >= 0 ? "+" : ""}${dep.lagDays}d`;
+    const title = `Dependency: ${dep.fromTaskId} → ${dep.toTaskId} (${dep.type || "FS"}${lag})${canDelete ? " (Click to remove link)" : ""}`;
 
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("d", dep.path);
@@ -75,13 +80,13 @@ export function renderDependencyLinks(props: DependencyLinksProps): DependencyLi
     path.dataset.activeMarker = activeMarker;
     path.setAttribute(
       "title",
-      `Dependency: ${dep.fromTaskId} → ${dep.toTaskId} (Click to remove link)`
+      title
     );
 
     // Click to delete dependency link
     path.addEventListener("click", (e) => {
       e.stopPropagation();
-      props.onLinkDelete?.(dep.fromTaskId, dep.toTaskId);
+      if (canDelete) props.onLinkDelete?.(dep.fromTaskId, dep.toTaskId, dep.relationshipIndex);
     });
 
     svg.appendChild(path);
@@ -92,14 +97,14 @@ export function renderDependencyLinks(props: DependencyLinksProps): DependencyLi
     hitPath.setAttribute("stroke", "transparent");
     hitPath.setAttribute("stroke-width", "12");
     hitPath.setAttribute("fill", "none");
-    hitPath.style.cursor = "pointer";
+    if (canDelete) hitPath.style.cursor = "pointer";
     hitPath.setAttribute(
       "title",
-      `Dependency: ${dep.fromTaskId} → ${dep.toTaskId} (Click to remove link)`
+      title
     );
     hitPath.addEventListener("click", (e) => {
       e.stopPropagation();
-      props.onLinkDelete?.(dep.fromTaskId, dep.toTaskId);
+      if (canDelete) props.onLinkDelete?.(dep.fromTaskId, dep.toTaskId, dep.relationshipIndex);
     });
     hitPath.addEventListener("mouseenter", () => {
       path.classList.add("is-active");
@@ -111,7 +116,7 @@ export function renderDependencyLinks(props: DependencyLinksProps): DependencyLi
     });
     svg.appendChild(hitPath);
 
-    depPathElements.set(`${dep.fromTaskId}->${dep.toTaskId}`, path);
+    depPathElements.set(dep, path);
   });
 
   return { svg, previewWireSvg, depPathElements };

@@ -1,6 +1,7 @@
 import { Task } from "../../types";
 import { parseISODate } from "../../date-math";
 import { getTaskDependencies } from "../../cpm";
+import { filterDependencies } from "../../dependencies";
 import { IPipelineStage, PipelineContext } from "../contracts";
 
 /**
@@ -37,13 +38,9 @@ export class SanitizeStage implements IPipelineStage<Task[], Task[]> {
       const validDeps = rawDeps.filter((depId) => depId !== copy.id && existingIds.has(depId));
 
       if (rawDeps.length !== validDeps.length) {
-        if (validDeps.length === 0) {
-          copy.dependsOn = null;
-        } else if (validDeps.length === 1) {
-          copy.dependsOn = validDeps[0];
-        } else {
-          copy.dependsOn = validDeps;
-        }
+        const removed = rawDeps.filter((depId) => depId === copy.id || !existingIds.has(depId));
+        context.diagnostics?.push(`Removed invalid dependencies from task '${copy.id}': ${removed.join(", ")}.`);
+        copy.dependsOn = filterDependencies(copy.dependsOn, (id) => id !== copy.id && existingIds.has(id));
       }
 
       return copy;

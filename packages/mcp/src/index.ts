@@ -4,6 +4,8 @@ import {
   Task,
   validate,
   resolveSchedule,
+  getScheduleContext,
+  DEFAULT_GAP_DAYS,
   calculateCriticalPath,
   auditScheduleIntegrity,
   exportToCsv,
@@ -111,7 +113,9 @@ export function executeTool(name: string, args: Record<string, unknown>): unknow
       const plan: JanttData = typeof args.planJson === "string" ? JSON.parse(args.planJson) : (args.planJson as JanttData);
       const validation = validate(plan);
       const tasks = plan.tasks || [];
-      const critical = calculateCriticalPath(tasks);
+      const critical = calculateCriticalPath(tasks, { ...getScheduleContext(plan), defaultGapDays: plan.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS });
+
+      if (critical.errors?.length) return { valid: false, validationErrors: validation.errors.map((e) => e.message), analysisErrors: critical.errors };
 
       return {
         valid: validation.valid,
@@ -131,7 +135,7 @@ export function executeTool(name: string, args: Record<string, unknown>): unknow
       const plan: JanttData = typeof args.planJson === "string" ? JSON.parse(args.planJson) : (args.planJson as JanttData);
       const newTask = args.task as Task;
       const tasks = [...(plan.tasks || []).filter((t) => t.id !== newTask.id), newTask];
-      const resolved = resolveSchedule(tasks, plan.meta?.defaultGapDays ?? 2);
+      const resolved = resolveSchedule(tasks, plan.meta?.defaultGapDays ?? 2, getScheduleContext(plan));
       const updatedPlan: JanttData = { ...plan, tasks: resolved };
 
       return {
@@ -154,7 +158,7 @@ export function executeTool(name: string, args: Record<string, unknown>): unknow
         return t;
       });
 
-      const resolved = resolveSchedule(tasks, plan.meta?.defaultGapDays ?? 2);
+      const resolved = resolveSchedule(tasks, plan.meta?.defaultGapDays ?? 2, getScheduleContext(plan));
       const updatedPlan: JanttData = { ...plan, tasks: resolved };
 
       return {
@@ -168,7 +172,8 @@ export function executeTool(name: string, args: Record<string, unknown>): unknow
       const plan: JanttData = typeof args.planJson === "string" ? JSON.parse(args.planJson) : (args.planJson as JanttData);
       const validation = validate(plan);
       const tasks = plan.tasks || [];
-      const critical = calculateCriticalPath(tasks);
+      const critical = calculateCriticalPath(tasks, { ...getScheduleContext(plan), defaultGapDays: plan.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS });
+      if (critical.errors?.length) return { valid: false, validationErrors: validation.errors, analysisErrors: critical.errors };
       const health = auditScheduleIntegrity(tasks, critical);
 
       return {

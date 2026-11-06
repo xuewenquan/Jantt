@@ -23,11 +23,12 @@ import {
   minISODate,
   parseISODate
 } from "./date-math";
-import { calculateCriticalPath } from "./resolver";
-import { getTaskDependencyRelations } from "./dependencies";
+import { calculateCriticalPath, getScheduleContext } from "./resolver";
+import { dependencyRelationKey, getRelationLag, getTaskDependencyRelations } from "./dependencies";
 import { clampDayWidth, getTaskDisplayName } from "./utils";
 import {
   DEFAULT_CATEGORY,
+  DEFAULT_GAP_DAYS,
   SCALE_DAY_WIDTHS,
   DEFAULT_ROW_HEIGHT,
   DEFAULT_LABEL_WIDTH,
@@ -187,7 +188,7 @@ export function layout(
 
   // Critical path calculation (use pre-computed master critical path if provided, or compute on tasks)
   const criticalResult =
-    viewportOptions.criticalResult || calculateCriticalPath(tasks);
+    viewportOptions.criticalResult || calculateCriticalPath(tasks, { ...getScheduleContext(data), defaultGapDays: data.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS, targetDate: data.meta?.targetDate });
   const { criticalTaskIds, criticalDepKeys } = criticalResult;
 
   // Compute TaskLayouts: Proportional bar height (~62% of row height) with vertical padding for dependency clearance
@@ -299,8 +300,14 @@ export function layout(
     if (relations.length === 0) return;
     const curr = layoutById.get(task.id);
     if (!curr) return;
-
+    const groupCounts = new Map<string, number>();
+    const groupPositions = new Map<string, number>();
     relations.forEach((rel) => {
+      const key = JSON.stringify([rel.id, rel.type]);
+      groupCounts.set(key, (groupCounts.get(key) || 0) + 1);
+    });
+
+    relations.forEach((rel, relationshipIndex) => {
       const prereq = layoutById.get(rel.id);
       if (!prereq) return;
 
@@ -312,8 +319,14 @@ export function layout(
       const toX = toEnd ? (curr.anchorOutX ?? (curr.x + curr.width)) : (curr.anchorInX ?? curr.x);
       const toY = toEnd ? (curr.anchorOutY ?? (curr.y + curr.height / 2)) : (curr.anchorInY ?? (curr.y + curr.height / 2));
 
-      const path = computeDependencyPath(fromX, fromY, toX, toY, viewport.rowHeight, linkRouting);
-      const isCritical = criticalDepKeys.has(`${prereq.task.id}->${curr.task.id}`);
+      const groupKey = JSON.stringify([rel.id, rel.type]);
+      const position = groupPositions.get(groupKey) || 0;
+      groupPositions.set(groupKey, position + 1);
+      const laneOffset = (position - (groupCounts.get(groupKey)! - 1) / 2) * 14;
+      const path = computeDependencyPath(fromX, fromY, toX, toY, viewport.rowHeight, linkRouting, laneOffset);
+      const isCritical = criticalResult.criticalRelationKeys
+        ? criticalResult.criticalRelationKeys.has(dependencyRelationKey(prereq.task.id, curr.task.id, rel))
+        : criticalDepKeys.has(`${prereq.task.id}->${curr.task.id}`);
 
       dependencies.push({
         fromTaskId: prereq.task.id,
@@ -325,7 +338,8 @@ export function layout(
         path,
         isCritical,
         type: rel.type,
-        lagDays: rel.lagDays
+        lagDays: getRelationLag(rel, curr.task, data.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS),
+        relationshipIndex
       });
     });
   });
@@ -512,7 +526,8 @@ export function computeDependencyPath(
   toX: number,
   toY: number,
   rowHeight = 46,
-  style: LinkRoutingStyle = "orthogonal"
+  style: LinkRoutingStyle = "orthogonal",
+  laneOffset = 0
 ): string {
   if (Math.abs(toX - fromX) < 2 && Math.abs(toY - fromY) < 2) {
     return "";
@@ -523,7 +538,7 @@ export function computeDependencyPath(
     if (toX >= fromX) {
       return `M ${fromX} ${fromY} L ${toX} ${toY}`;
     }
-    const dropY = fromY + Math.round(rowHeight * 0.45);
+    const dropY = fromY + Math.round(rowHeight * 0.45) + laneOffset;
     const stepOutX = fromX + 8;
     const stepInX = toX - 8;
     return `M ${fromX} ${fromY} L ${stepOutX} ${fromY} L ${stepOutX} ${dropY} L ${stepInX} ${dropY} L ${stepInX} ${toY} L ${toX} ${toY}`;
@@ -537,18 +552,18 @@ export function computeDependencyPath(
       const leadIn = 8;
       const endX = toX - leadIn;
       const cdx = Math.max(endX - fromX, 16);
-      const cp1X = fromX + cdx * 0.5;
-      const cp2X = endX - cdx * 0.5;
+      const cp1X = fromX + cdx * 0.5 + laneOffset;
+      const cp2X = endX - cdx * 0.5 + laneOffset;
       return `M ${fromX} ${fromY} C ${cp1X} ${fromY}, ${cp2X} ${toY}, ${endX} ${toY} L ${toX} ${toY}`;
     }
 
     if (style === "direct") {
       const lead = Math.min(10, Math.floor(dx / 2));
-      return `M ${fromX} ${fromY} L ${fromX + lead} ${fromY} L ${toX - lead} ${toY} L ${toX} ${toY}`;
+      return `M ${fromX} ${fromY} L ${fromX + lead + laneOffset} ${fromY} L ${toX - lead + laneOffset} ${toY} L ${toX} ${toY}`;
     }
 
     // Default "orthogonal" (Clean 90-degree right angles with mid-split)
-    const midX = fromX + Math.round(dx / 2);
+    const midX = fromX + Math.round(dx / 2) + laneOffset;
     return `M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`;
   }
 
@@ -560,8 +575,8 @@ export function computeDependencyPath(
   const stepInX = toX - leadIn;
   // Route through the boundary gutter directly below source row (or above if going upwards)
   const gutterY = fromY < toY
-    ? fromY + Math.round(rowHeight * 0.5)
-    : fromY - Math.round(rowHeight * 0.5);
+    ? fromY + Math.round(rowHeight * 0.5) + laneOffset
+    : fromY - Math.round(rowHeight * 0.5) + laneOffset;
 
   if (style === "curved") {
     return `M ${fromX} ${fromY} C ${stepOutX + 6} ${fromY}, ${stepOutX + 6} ${gutterY}, ${stepOutX} ${gutterY} L ${stepInX} ${gutterY} C ${stepInX - 6} ${gutterY}, ${stepInX - 6} ${toY}, ${stepInX} ${toY} L ${toX} ${toY}`;

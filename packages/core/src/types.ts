@@ -16,9 +16,15 @@ export interface JanttMeta {
   person?: string;
   start?: string; // YYYY-MM-DD
   end?: string; // YYYY-MM-DD
+  /** Contractual completion date used to calculate total float. */
+  targetDate?: string;
   chartStart?: string; // Backwards-compatible alias for start
   chartEnd?: string; // Backwards-compatible alias for end
   defaultGapDays?: number;
+  /** Default resource capacity in allocation units (1 = 100%). */
+  defaultResourceCapacity?: number;
+  /** Resource-specific capacities keyed by person ID or name. */
+  resourceCapacities?: Record<string, number>;
   scale?: TimeScale;
   linkRouting?: LinkRoutingStyle;
   showCriticalPath?: boolean;
@@ -165,6 +171,7 @@ export interface Task {
   urgent?: boolean;
   priority?: "low" | "medium" | "high" | "urgent" | string;
   assignee?: string; // Person.id or Person.name
+  allocation?: number; // Allocation units (1 = 100%)
   teamId?: string; // Direct or inherited Team.id
   calendar?: WorkingCalendar | CalendarPreset | string;
   calendarId?: string;
@@ -265,6 +272,12 @@ export interface CriticalPathOptions {
   targetDate?: string; // Contractual completion deadline (causes negative float if project slips)
   nearCriticalThresholdDays?: number; // Default: 3 days
   defaultGapDays?: number;
+  useWorkingDays?: boolean;
+  calendar?: WorkingCalendar | CalendarPreset;
+  calendars?: Record<string, WorkingCalendar>;
+  people?: Person[];
+  /** Maximum number of explicit critical paths to enumerate (default 1000). */
+  maxCriticalPaths?: number;
 }
 
 export interface TaskScheduleMetrics {
@@ -282,13 +295,20 @@ export interface TaskScheduleMetrics {
 }
 
 export interface CriticalPathResult {
+  /** Reasons why a critical path could not be calculated. */
+  errors?: string[];
   criticalTaskIds: Set<string>;
+  /** Legacy `from->to` keys; ambiguous when IDs contain `->` and unable to distinguish relationships. */
   criticalDepKeys: Set<string>;
+  /** Driving relationships, distinguished by type and lag; use dependencyRelationKey to test membership. */
+  criticalRelationKeys?: Set<string>;
   nearCriticalTaskIds: Set<string>;
   projectEarlyFinish: string;
   projectLateFinish: string;
   projectTotalFloat: number;
   criticalPaths: string[][]; // Ordered sequences of task IDs along each critical path
+  /** True when additional paths exist beyond the enumeration limit. */
+  criticalPathsTruncated?: boolean;
   metrics: Map<string, TaskScheduleMetrics>;
 }
 
@@ -407,6 +427,8 @@ export interface DependencyLine {
   isCritical: boolean;
   type?: DependencyType;
   lagDays?: number;
+  /** Index in the successor's normalized relationship list. */
+  relationshipIndex?: number;
 }
 
 export interface HeaderYear {

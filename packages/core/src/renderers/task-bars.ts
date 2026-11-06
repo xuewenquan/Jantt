@@ -8,7 +8,7 @@ import { isTaskDone } from "../utils";
 export interface TaskBarsProps {
   taskLayouts: TaskLayout[];
   dependencies: DependencyLine[];
-  depPathElements: Map<string, SVGPathElement>;
+  depPathElements: Map<DependencyLine, SVGPathElement>;
   showCritical: boolean;
   showBaselines: boolean;
   readOnly?: boolean;
@@ -44,7 +44,7 @@ export function renderTaskBars(props: TaskBarsProps, container: HTMLElement): vo
     const connected = taskDepMap.get(taskId);
     if (!connected) return;
     connected.forEach((dep) => {
-      const el = props.depPathElements.get(`${dep.fromTaskId}->${dep.toTaskId}`);
+      const el = props.depPathElements.get(dep);
       if (el) {
         el.classList.add("is-active");
         el.setAttribute("marker-end", el.dataset.activeMarker || "url(#jantt-arrow-active)");
@@ -56,7 +56,7 @@ export function renderTaskBars(props: TaskBarsProps, container: HTMLElement): vo
     const connected = taskDepMap.get(taskId);
     if (!connected) return;
     connected.forEach((dep) => {
-      const el = props.depPathElements.get(`${dep.fromTaskId}->${dep.toTaskId}`);
+      const el = props.depPathElements.get(dep);
       if (el) {
         el.classList.remove("is-active");
         const isCrit = props.showCritical && dep.isCritical;

@@ -1,4 +1,4 @@
-import { Task, Person, WorkingCalendar } from "../types";
+import { Task, Person, WorkingCalendar, CalendarPreset } from "../types";
 
 /**
  * Execution context passed through the pipeline stages.
@@ -12,14 +12,18 @@ export interface PipelineContext {
   options?: Record<string, any>;
   /** Diagnostics or warnings captured during stage execution. */
   diagnostics?: string[];
+  /** Fatal error that stopped processing before the schedule was resolved. */
+  fatalError?: string;
   /** Default project-wide working calendar */
-  calendar?: WorkingCalendar;
+  calendar?: WorkingCalendar | CalendarPreset;
   /** Dictionary of named working calendars */
   calendars?: Record<string, WorkingCalendar>;
   /** Project team members / people */
   people?: Person[];
   /** Whether working-day calendar arithmetic should be used in schedule cascading */
   useWorkingDays?: boolean;
+  /** Contractual completion date used for float calculations. */
+  targetDate?: string;
 }
 
 /**

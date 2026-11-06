@@ -42,7 +42,72 @@ function createMockContext(tasks: Task[], overrides?: Partial<GestureContext>): 
 }
 
 describe("Gesture Strategies", () => {
+  it("does not create a dependency on a locked task", () => {
+    const tasks: Task[] = [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-04", end: "2026-11-05", locked: true }
+    ];
+    const { ctx, commits } = createMockContext(tasks);
+    const target = document.createElement("div");
+    target.dataset.taskId = "b";
+    const original = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => target });
+    try {
+      new LinkGestureStrategy().onUp({ clientX: 0, clientY: 0 } as PointerEvent, {
+        mode: "link", taskId: "a", linkFromTaskId: "a", startX: 0, startY: 0, origStart: tasks[0].start, origEnd: tasks[0].end, moved: true
+      }, ctx);
+      expect(tasks[1].dependsOn).toBeUndefined();
+      expect(commits).toHaveLength(0);
+    } finally {
+      if (original) Object.defineProperty(document, "elementFromPoint", original);
+      else delete (document as Partial<Document>).elementFromPoint;
+    }
+  });
+  it("does not commit or report creation when a dragged link already exists", () => {
+    const tasks: Task[] = [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-04", end: "2026-11-05", dependsOn: "a:SS+1d" }
+    ];
+    const { ctx, commits } = createMockContext(tasks);
+    const target = document.createElement("div");
+    target.dataset.taskId = "b";
+    const original = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => target });
+    try {
+      new LinkGestureStrategy().onUp({ clientX: 0, clientY: 0 } as PointerEvent, {
+        mode: "link", taskId: "a", linkFromTaskId: "a", startX: 0, startY: 0, origStart: tasks[0].start, origEnd: tasks[0].end, moved: true
+      }, ctx);
+      expect(commits).toHaveLength(0);
+      expect(ctx.options.onLinkCreate).not.toHaveBeenCalled();
+      expect(tasks[1].dependsOn).toBe("a:SS+1d");
+    } finally {
+      if (original) Object.defineProperty(document, "elementFromPoint", original);
+      else delete (document as Partial<Document>).elementFromPoint;
+    }
+  });
   describe("MoveGestureStrategy", () => {
+    it("honors SS instead of FS when moving without cascading", () => {
+      const tasks: Task[] = [
+        { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-12" },
+        { id: "b", category: "dev", start: "2026-11-05", end: "2026-11-06", dependsOn: "a:SS+1d" }
+      ];
+      const { ctx } = createMockContext(tasks, { autoCascade: false });
+      new MoveGestureStrategy().onMove({ clientX: -40, clientY: 0 } as PointerEvent, {
+        mode: "move", taskId: "b", startX: 0, startY: 0, origStart: "2026-11-05", origEnd: "2026-11-06", moved: true
+      }, ctx);
+      expect(ctx.data.tasks[1].start).toBe("2026-11-04");
+      expect(ctx.data.tasks[0].end).toBe("2026-11-12");
+    });
+
+    it("preserves working duration when moving a task across a weekend", () => {
+      const tasks: Task[] = [{ id: "a", category: "dev", start: "2026-11-05", end: "2026-11-06" }];
+      const { ctx } = createMockContext(tasks, { autoCascade: false });
+      ctx.data.meta = { calendar: "standard" };
+      new MoveGestureStrategy().onMove({ clientX: 40, clientY: 0 } as PointerEvent, {
+        mode: "move", taskId: "a", startX: 0, startY: 0, origStart: "2026-11-05", origEnd: "2026-11-06", moved: true
+      }, ctx);
+      expect(ctx.data.tasks[0]).toMatchObject({ start: "2026-11-06", end: "2026-11-09" });
+    });
     it("shifts single task by calculated delta days and cascades dependents", () => {
       const strategy = new MoveGestureStrategy();
       const tasks: Task[] = [
@@ -99,9 +164,53 @@ describe("Gesture Strategies", () => {
       expect(ctx.data.tasks.find((t) => t.id === "t1")?.start).toBe("2026-09-02");
       expect(ctx.data.tasks.find((t) => t.id === "t2")?.start).toBe("2026-09-06");
     });
+
+    it("enforces dependencies for every multi-selected task without cascading", () => {
+      const tasks: Task[] = [
+        { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-04" },
+        { id: "b", category: "dev", start: "2026-11-05", end: "2026-11-06", dependsOn: "a:FS+0d" },
+        { id: "c", category: "dev", start: "2026-11-07", end: "2026-11-08" }
+      ];
+      const { ctx } = createMockContext(tasks, { autoCascade: false });
+      const multiTasks = new Map([
+        ["b", { start: "2026-11-05", end: "2026-11-06" }],
+        ["c", { start: "2026-11-07", end: "2026-11-08" }]
+      ]);
+      const state: DragState = { mode: "move", taskId: "b", startX: 0, startY: 0, moved: true, multiTasks };
+      new MoveGestureStrategy().onMove({ clientX: -120, clientY: 0 } as PointerEvent, state, ctx);
+      const byId = new Map(ctx.data.tasks.map((task) => [task.id, task]));
+      expect(byId.get("b")!.start >= byId.get("a")!.end).toBe(true);
+      expect(byId.get("c")!.start).toBe("2026-11-04");
+    });
   });
 
   describe("ResizeGestureStrategy", () => {
+    it.each(["FF", "SF"] as const)("keeps %s finish constraints when cascading is disabled", (type) => {
+      const tasks: Task[] = [
+        { id: "a", category: "dev", start: "2026-11-10", end: "2026-11-12" },
+        { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-15", dependsOn: [{ id: "a", type, lagDays: 0 }] }
+      ];
+      const { ctx } = createMockContext(tasks, { autoCascade: false });
+      const state: DragState = { mode: "resize", taskId: "b", startX: 0, startY: 0, origStart: "2026-11-02", origEnd: "2026-11-15", moved: true };
+      new ResizeGestureStrategy().onMove({ clientX: -280, clientY: 0 } as PointerEvent, state, ctx);
+      expect(ctx.data.tasks[1].end).toBe(type === "FF" ? "2026-11-12" : "2026-11-10");
+      expect(ctx.data.tasks[1].start).toBe("2026-11-02");
+    });
+
+    it("snaps a resized finish to a working day", () => {
+      const { ctx } = createMockContext([{ id: "a", category: "dev", start: "2026-11-04", end: "2026-11-06" }], { autoCascade: false });
+      ctx.data.meta = { calendar: "standard" };
+      const state: DragState = { mode: "resize", taskId: "a", startX: 0, startY: 0, origStart: "2026-11-04", origEnd: "2026-11-06", moved: true };
+      new ResizeGestureStrategy().onMove({ clientX: 40, clientY: 0 } as PointerEvent, state, ctx);
+      expect(ctx.data.tasks[0].end).toBe("2026-11-09");
+    });
+    it("shrinks across a weekend to the previous working day", () => {
+      const { ctx } = createMockContext([{ id: "a", category: "dev", start: "2026-11-04", end: "2026-11-09" }], { autoCascade: false });
+      ctx.data.meta = { calendar: "standard" };
+      const state: DragState = { mode: "resize", taskId: "a", startX: 0, startY: 0, origStart: "2026-11-04", origEnd: "2026-11-09", moved: true };
+      new ResizeGestureStrategy().onMove({ clientX: -40, clientY: 0 } as PointerEvent, state, ctx);
+      expect(ctx.data.tasks[0].end).toBe("2026-11-06");
+    });
     it("resizes task end date by delta days", () => {
       const strategy = new ResizeGestureStrategy();
       const tasks: Task[] = [

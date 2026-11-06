@@ -1,5 +1,6 @@
 import { Task, Category, TaskScheduleMetrics } from "../types";
 import { formatHumanDate, diffDays } from "../date-math";
+import { formatDependency, getTaskDependencyRelations } from "../dependencies";
 
 export interface TooltipOptions {
   theme?: Record<string, string>;
@@ -139,7 +140,7 @@ export function createTooltipController(initialOptions: TooltipOptions = {}): To
         <div class="jantt-hover-stat-row">
           <span class="jantt-hover-stat-label">Depends On</span>
           <span class="jantt-hover-stat-value" style="font-family: var(--jantt-font-mono); color: var(--jantt-accent); font-weight: 600;">
-            ${escapeHtml(Array.isArray(task.dependsOn) ? task.dependsOn.map((d) => (typeof d === "string" ? d : d.id)).join(", ") : (typeof task.dependsOn === "string" ? task.dependsOn : (task.dependsOn?.id || "")))}
+            ${escapeHtml(getTaskDependencyRelations(task).map(formatDependency).join(", "))}
           </span>
         </div>
         `
@@ -152,7 +153,7 @@ export function createTooltipController(initialOptions: TooltipOptions = {}): To
         <div class="jantt-hover-stat-row">
           <span class="jantt-hover-stat-label">Schedule Buffer</span>
           <span class="jantt-hover-stat-value" style="font-weight: 600; color: ${metrics.isCritical ? "var(--jantt-critical, #EF4444)" : metrics.totalFloat < 0 ? "#EF4444" : metrics.isNearCritical ? "#F59E0B" : "#10B981"};">
-            ${metrics.isCritical ? "Critical Path (0d buffer)" : metrics.totalFloat < 0 ? `Overdue by ${Math.abs(metrics.totalFloat)}d` : `${metrics.totalFloat}d buffer (Free: ${metrics.freeFloat}d)`}
+            ${metrics.totalFloat < 0 ? `Overdue by ${Math.abs(metrics.totalFloat)}d` : metrics.isCritical ? `Critical Path (${metrics.totalFloat}d buffer)` : `${metrics.totalFloat}d buffer (Free: ${metrics.freeFloat}d)`}
           </span>
         </div>
         `

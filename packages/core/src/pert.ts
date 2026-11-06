@@ -74,6 +74,7 @@ export function calculatePertRisk(
   criticalResult: CriticalPathResult,
   targetDate?: string
 ): PertRiskResult {
+  if (criticalResult.errors?.length) throw new Error(`Cannot calculate PERT risk: ${criticalResult.errors.join("; ")}`);
   if (!tasks || tasks.length === 0) {
     return {
       expectedProjectDurationDays: 0,

@@ -8,12 +8,12 @@
  * - Print-optimized CSS (@page landscape, vector font rendering, page-break management)
  */
 
-import { Task, EVMResult, ScheduleHealthResult, CriticalPathResult } from "@jantt/core";
+import { Task, EVMResult, ScheduleHealthResult, CriticalPathResult, CriticalPathOptions } from "@jantt/core";
 import { calculateEVM } from "@jantt/core";
 import { auditScheduleIntegrity } from "@jantt/core";
 import { calculateCriticalPath } from "@jantt/core";
 import { diffDays, addDays, isValidISODate } from "@jantt/core";
-import { getTaskDependencyRelations } from "@jantt/core";
+import { dependencyRelationKey, getTaskDependencyRelations } from "@jantt/core";
 
 export interface ExecutiveReportOptions {
   title?: string;
@@ -26,6 +26,7 @@ export interface ExecutiveReportOptions {
   includeHealth?: boolean;
   includeMilestones?: boolean;
   includeTimeline?: boolean;
+  cpmOptions?: CriticalPathOptions;
 }
 
 /**
@@ -57,8 +58,10 @@ export function exportExecutiveReportHtml(tasks: Task[], options: ExecutiveRepor
   }
 
   try {
-    cpm = calculateCriticalPath(liveTasks);
-    if (cpm) {
+    cpm = calculateCriticalPath(liveTasks, options.cpmOptions);
+    if (cpm.errors?.length) {
+      cpm = null;
+    } else {
       health = auditScheduleIntegrity(liveTasks, cpm);
     }
   } catch {
@@ -726,16 +729,19 @@ function renderSvgTimelinePage(
       if (predY !== undefined) {
         const predTask = tasks.find((item) => item.id === rel.id);
         if (predTask && predTask.end && t.start) {
-          const predEndOffset = diffDays(chartStart, predTask.end);
-          const succStartOffset = diffDays(chartStart, t.start);
-          const x1 = tableWidth + predEndOffset * pxPerDay;
+          const predDate = rel.type === "SS" || rel.type === "SF" ? predTask.start : predTask.end;
+          const succDate = rel.type === "FF" || rel.type === "SF" ? t.end : t.start;
+          const x1 = tableWidth + diffDays(chartStart, predDate) * pxPerDay;
           const y1 = predY;
-          const x2 = tableWidth + succStartOffset * pxPerDay;
+          const x2 = tableWidth + diffDays(chartStart, succDate) * pxPerDay;
           const y2 = y + rowHeight / 2;
 
           const midX = x1 + 10;
-          const stroke = isCrit ? "#ef4444" : "#94a3b8";
-          depPaths += `<path d="M ${x1} ${y1} H ${midX} V ${y2} H ${x2}" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="${isCrit ? "none" : "2,2"}" marker-end="url(#arrow)" />`;
+          const isCriticalLink = cpm?.criticalRelationKeys
+            ? cpm.criticalRelationKeys.has(dependencyRelationKey(rel.id, t.id, rel))
+            : Boolean(cpm?.criticalDepKeys.has(`${rel.id}->${t.id}`));
+          const stroke = isCriticalLink ? "#ef4444" : "#94a3b8";
+          depPaths += `<path d="M ${x1} ${y1} H ${midX} V ${y2} H ${x2}" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="${isCriticalLink ? "none" : "2,2"}" marker-end="url(#arrow)" />`;
         }
       }
     });
@@ -790,7 +796,8 @@ export function exportExecutiveReportSvg(tasks: Task[], options: ExecutiveReport
 
   let cpm: CriticalPathResult | null = null;
   try {
-    cpm = calculateCriticalPath(liveTasks);
+    cpm = calculateCriticalPath(liveTasks, options.cpmOptions);
+    if (cpm.errors?.length) cpm = null;
   } catch {
     // fallback
   }

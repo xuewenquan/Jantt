@@ -40,6 +40,12 @@
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
           "description": "Alias for meta.start."
         },
+        "targetDate": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Contractual completion date for total float calculations."
+        },
         "chartEnd": {
           "type": "string",
           "format": "date",
@@ -50,7 +56,15 @@
           "type": "number",
           "minimum": 0,
           "default": 2,
-          "description": "Default spacing (in days) between tasks sharing a category without explicit dependencies."
+          "description": "Default lag for dependencies that omit an explicit lag."
+        },
+        "defaultResourceCapacity": {
+          "type": "number", "minimum": 0, "default": 1,
+          "description": "Default resource capacity in allocation units, where 1 is 100%."
+        },
+        "resourceCapacities": {
+          "type": "object", "additionalProperties": { "type": "number", "minimum": 0 },
+          "description": "Resource capacity overrides keyed by person ID or name."
         },
         "generatedAt": {
           "type": "string",
@@ -209,8 +223,13 @@
             "description": "End date (inclusive / exclusive range) in ISO format YYYY-MM-DD."
           },
           "dependsOn": {
-            "type": ["string", "null"],
-            "description": "ID of prerequisite task that must conclude before this task begins."
+            "description": "Predecessor relationships; a relationship can be an ID, a typed expression, or an object with an independent lag.",
+            "anyOf": [
+              { "type": "null" },
+              { "type": "string" },
+              { "$ref": "#/definitions/dependency" },
+              { "type": "array", "items": { "anyOf": [{ "type": "string" }, { "$ref": "#/definitions/dependency" }] } }
+            ]
           },
           "gapDays": {
             "type": ["number", "null"],
@@ -246,6 +265,10 @@
             "type": "string",
             "description": "ID of the assigned team member (references people[].id) or assignee name."
           },
+          "allocation": {
+            "type": "number", "minimum": 0,
+            "description": "Task resource allocation in units, where 1 is 100%."
+          },
           "teamId": {
             "type": "string",
             "description": "ID of the assigned team/squad (references teams[].id)."
@@ -270,6 +293,18 @@
           }
         },
         "additionalProperties": true
+      }
+    }
+  },
+  "definitions": {
+    "dependency": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "enum": ["FS", "SS", "FF", "SF"] },
+        "lag": { "type": "integer" },
+        "lagDays": { "type": "integer" }
       }
     }
   },

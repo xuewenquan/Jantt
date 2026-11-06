@@ -8,6 +8,7 @@
 
 import { parseISODate, formatISODate, isValidISODate, addDays, diffDays } from "./date-math";
 import type { Task, Person } from "./types";
+import { resolvePersonById } from "./team-resolver";
 
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sun, 1 = Mon, ..., 6 = Sat
 
@@ -31,6 +32,24 @@ export interface WorkingCalendar {
   region?: RegionCode | string;
   /** Custom day-specific overrides (force-working or force-holiday). */
   exceptions?: { date: string; isWorkingDay: boolean; name?: string }[];
+}
+
+/** Stable signature of the rules that determine working-day arithmetic. */
+export function calendarRulesSignature(calendar?: WorkingCalendar): string {
+  if (!calendar) return "continuous";
+  return JSON.stringify({
+    workingDays: [...new Set(calendar.workingDays ?? [1, 2, 3, 4, 5])].sort(),
+    holidays: (calendar.holidays ?? []).map((holiday) => typeof holiday === "string" ? holiday : holiday.date).sort(),
+    exceptions: (calendar.exceptions ?? []).map(({ date, isWorkingDay }) => [date, isWorkingDay]),
+    region: calendar.region?.trim().toUpperCase() || ""
+  });
+}
+
+export class CalendarError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CalendarError";
+  }
 }
 
 export const CALENDAR_PRESETS: Record<CalendarPreset, WorkingCalendar> = {
@@ -294,10 +313,12 @@ export function getNextWorkingDay(
   const cal = createCalendar(calendar);
   let curr = typeof date === "string" ? date.split("T")[0].trim() : formatISODate(date);
   let guard = 0;
-  while (!isWorkingDay(curr, cal) && guard < 366) {
+  if (!isValidISODate(curr)) throw new CalendarError(`Invalid calendar date '${curr}'`);
+  while (!isWorkingDay(curr, cal) && guard < 10000) {
     curr = addDays(curr, 1);
     guard++;
   }
+  if (!isWorkingDay(curr, cal)) throw new CalendarError(`No working day found after '${date}'`);
   return curr;
 }
 
@@ -312,10 +333,12 @@ export function getPreviousWorkingDay(
   const cal = createCalendar(calendar);
   let curr = typeof date === "string" ? date.split("T")[0].trim() : formatISODate(date);
   let guard = 0;
-  while (!isWorkingDay(curr, cal) && guard < 366) {
+  if (!isValidISODate(curr)) throw new CalendarError(`Invalid calendar date '${curr}'`);
+  while (!isWorkingDay(curr, cal) && guard < 10000) {
     curr = addDays(curr, -1);
     guard++;
   }
+  if (!isWorkingDay(curr, cal)) throw new CalendarError(`No working day found before '${date}'`);
   return curr;
 }
 
@@ -335,6 +358,7 @@ export function addWorkingDays(
   const cal = createCalendar(calendar);
   let curr = typeof date === "string" ? date.split("T")[0].trim() : formatISODate(date);
   const targetDays = Number.isFinite(days) ? Math.round(days) : 0;
+  if (!isValidISODate(curr)) throw new CalendarError(`Invalid calendar date '${curr}'`);
 
   if (targetDays === 0) {
     return isWorkingDay(curr, cal) ? curr : getNextWorkingDay(curr, cal);
@@ -343,7 +367,7 @@ export function addWorkingDays(
   const step = targetDays > 0 ? 1 : -1;
   let remaining = Math.abs(targetDays);
   let guard = 0;
-  const MAX_STEPS = 5000;
+  const MAX_STEPS = Math.min(200000, Math.max(10000, Math.abs(targetDays) * 14 + (cal.holidays?.length || 0) + (cal.exceptions?.length || 0)));
 
   while (remaining > 0 && guard < MAX_STEPS) {
     curr = addDays(curr, step);
@@ -353,6 +377,7 @@ export function addWorkingDays(
     guard++;
   }
 
+  if (remaining > 0) throw new CalendarError(`Cannot add ${targetDays} working days from '${date}'`);
   return curr;
 }
 
@@ -373,23 +398,41 @@ export function diffWorkingDays(
   const startStr = typeof startDate === "string" ? startDate.split("T")[0].trim() : formatISODate(startDate);
   const endStr = typeof endDate === "string" ? endDate.split("T")[0].trim() : formatISODate(endDate);
 
+  if (!isValidISODate(startStr) || !isValidISODate(endStr)) throw new CalendarError("Invalid calendar date range");
+
   if (startStr === endStr) return 0;
 
   const inverted = diffDays(startStr, endStr) < 0;
-  let a = inverted ? endStr : startStr;
+  const a = inverted ? endStr : startStr;
   const b = inverted ? startStr : endStr;
 
   let workingCount = 0;
-  let curr = addDays(a, 1);
-  let guard = 0;
-  const MAX_DAYS = 10000;
-
-  while (diffDays(curr, b) >= 0 && guard < MAX_DAYS) {
-    if (isWorkingDay(curr, cal)) {
-      workingCount++;
+  if (!cal.holidays?.length && !cal.exceptions?.length && !cal.region) {
+    // No date-specific exceptions: count whole weeks arithmetically.
+    const from = addDays(a, 1);
+    const span = diffDays(from, b) + 1;
+    if (span > 0) {
+      const workingDays = new Set<number>(cal.workingDays ?? [1, 2, 3, 4, 5]);
+      workingCount = Math.floor(span / 7) * workingDays.size;
+      const firstWeekday = parseISODate(from).getUTCDay();
+      for (let i = 0; i < span % 7; i++) {
+        if (workingDays.has((firstWeekday + i) % 7)) workingCount++;
+      }
     }
-    curr = addDays(curr, 1);
-    guard++;
+  } else {
+    let curr = addDays(a, 1);
+    let guard = 0;
+    const MAX_DAYS = 100000;
+    while (diffDays(curr, b) >= 0 && guard < MAX_DAYS) {
+      if (isWorkingDay(curr, cal)) {
+        workingCount++;
+      }
+      curr = addDays(curr, 1);
+      guard++;
+    }
+    if (guard >= MAX_DAYS && diffDays(curr, b) >= 0) {
+      throw new CalendarError("Working-day range is too large.");
+    }
   }
 
   return inverted ? -workingCount : workingCount;
@@ -407,16 +450,15 @@ export function getWorkingDaysInRange(
   let curr = typeof startDate === "string" ? startDate.split("T")[0].trim() : formatISODate(startDate);
   const end = typeof endDate === "string" ? endDate.split("T")[0].trim() : formatISODate(endDate);
 
-  const result: string[] = [];
-  let guard = 0;
-  const MAX_DAYS = 5000;
+  if (!isValidISODate(curr) || !isValidISODate(end)) throw new CalendarError("Invalid calendar date range");
+  if (diffDays(curr, end) > 100000) throw new CalendarError("Working-day range is too large.");
 
-  while (diffDays(curr, end) >= 0 && guard < MAX_DAYS) {
+  const result: string[] = [];
+  while (diffDays(curr, end) >= 0) {
     if (isWorkingDay(curr, cal)) {
       result.push(curr);
     }
     curr = addDays(curr, 1);
-    guard++;
   }
 
   return result;
@@ -439,51 +481,41 @@ export function resolveTaskCalendar(
     defaultCalendar?: WorkingCalendar | CalendarPreset;
   }
 ): WorkingCalendar {
+  const lookup = (id: string): WorkingCalendar => {
+    if (context?.calendars && Object.prototype.hasOwnProperty.call(context.calendars, id)) return context.calendars[id];
+    if (Object.prototype.hasOwnProperty.call(CALENDAR_PRESETS, id)) return CALENDAR_PRESETS[id as CalendarPreset];
+    throw new CalendarError(`Unknown calendar '${id}'`);
+  };
   // 1. Task calendar
   if (task.calendar) {
     if (typeof task.calendar === "object") {
       return createCalendar(task.calendar as WorkingCalendar);
     }
     if (typeof task.calendar === "string") {
-      if (context?.calendars?.[task.calendar]) {
-        return context.calendars[task.calendar];
-      }
-      if (CALENDAR_PRESETS[task.calendar as CalendarPreset]) {
-        return CALENDAR_PRESETS[task.calendar as CalendarPreset];
-      }
+      return lookup(task.calendar);
     }
   }
-  if (task.calendarId && context?.calendars?.[task.calendarId]) {
-    return context.calendars[task.calendarId];
-  }
+  if (task.calendarId) return lookup(task.calendarId);
 
   // 2. Assignee / Person calendar
   if (task.assignee && context?.people) {
-    const person = context.people.find(
-      (p) => p.id === task.assignee || p.name === task.assignee
-    );
+    const person = resolvePersonById(context.people, task.assignee);
     if (person) {
       if (person.calendar) {
         if (typeof person.calendar === "object") {
           return createCalendar(person.calendar as WorkingCalendar);
         }
         if (typeof person.calendar === "string") {
-          if (context?.calendars?.[person.calendar]) {
-            return context.calendars[person.calendar];
-          }
-          if (CALENDAR_PRESETS[person.calendar as CalendarPreset]) {
-            return CALENDAR_PRESETS[person.calendar as CalendarPreset];
-          }
+          return lookup(person.calendar);
         }
       }
-      if (person.calendarId && context?.calendars?.[person.calendarId]) {
-        return context.calendars[person.calendarId];
-      }
+      if (person.calendarId) return lookup(person.calendarId);
     }
   }
 
   // 3. Default calendar
   if (context?.defaultCalendar) {
+    if (typeof context.defaultCalendar === "string") return lookup(context.defaultCalendar);
     return createCalendar(context.defaultCalendar);
   }
 

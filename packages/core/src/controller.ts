@@ -1,6 +1,7 @@
 import { JanttData, Task, JanttOptions, TaskLayout } from "./types";
 import { addDays, diffDays } from "./date-math";
-import { resolveSchedule, getTaskDependencies } from "./resolver";
+import { resolveSchedule, getScheduleContext } from "./resolver";
+import { filterDependencies } from "./dependencies";
 import { DEFAULT_GAP_DAYS } from "./constants";
 import {
   DragMode,
@@ -98,7 +99,7 @@ export class InteractionController {
       clearSelection: () => this.clearSelection(),
       setTasks: (tasks, triggerCascade) => {
         if (triggerCascade && this.autoCascade) {
-          this.data.tasks = resolveSchedule(tasks, this.defaultGapDays);
+          this.data.tasks = resolveSchedule(tasks, this.defaultGapDays, getScheduleContext(this.data));
         } else {
           this.data.tasks = tasks;
         }
@@ -164,7 +165,7 @@ export class InteractionController {
   public toggleAutoCascade(): boolean {
     this.autoCascade = !this.autoCascade;
     if (this.autoCascade) {
-      this.data.tasks = resolveSchedule(this.data.tasks, this.defaultGapDays);
+      this.data.tasks = resolveSchedule(this.data.tasks, this.defaultGapDays, getScheduleContext(this.data));
       this.options.onCommit?.(this.data);
     }
     return this.autoCascade;
@@ -175,7 +176,7 @@ export class InteractionController {
     if (!task) return;
     task.locked = !task.locked;
     if (this.autoCascade) {
-      this.data.tasks = resolveSchedule(this.data.tasks, this.defaultGapDays);
+      this.data.tasks = resolveSchedule(this.data.tasks, this.defaultGapDays, getScheduleContext(this.data));
     }
     this.onRenderRequest();
     this.options.onChange?.(this.data);
@@ -500,13 +501,9 @@ export class InteractionController {
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       const taskIdToDelete = task.id;
-      const nextTasks = this.data.tasks.filter((t) => t.id !== taskIdToDelete);
-      nextTasks.forEach((t) => {
-        const remaining = getTaskDependencies(t).filter((id) => id !== taskIdToDelete);
-        t.dependsOn = remaining.length === 0 ? null : remaining.length === 1 ? remaining[0] : remaining;
-      });
+      const nextTasks = this.data.tasks.filter((t) => t.id !== taskIdToDelete).map((t) => ({ ...t, dependsOn: filterDependencies(t.dependsOn, (id) => id !== taskIdToDelete) }));
       this.selectedTaskIds.delete(taskIdToDelete);
-      const resolved = this.autoCascade ? resolveSchedule(nextTasks, this.defaultGapDays) : nextTasks;
+      const resolved = this.autoCascade ? resolveSchedule(nextTasks, this.defaultGapDays, getScheduleContext(this.data)) : nextTasks;
       this.data = { ...this.data, tasks: resolved };
       this.onRenderRequest();
       this.options.onTaskDelete?.(taskIdToDelete);
@@ -553,7 +550,7 @@ export class InteractionController {
 
     if (modified) {
       if (this.autoCascade) {
-        const resolved = resolveSchedule(this.data.tasks, this.defaultGapDays);
+        const resolved = resolveSchedule(this.data.tasks, this.defaultGapDays, getScheduleContext(this.data));
         this.data = { ...this.data, tasks: resolved };
       }
       this.onRenderRequest();

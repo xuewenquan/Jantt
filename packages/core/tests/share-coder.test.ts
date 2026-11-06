@@ -7,6 +7,7 @@ import {
   base64UrlToUint8
 } from "../src/share-coder";
 import type { JanttData } from "../src/types";
+import { calculatePlanHash } from "../src/reconciliation/crdt-hash";
 
 describe("share-coder", () => {
   const mockPlan: JanttData = {
@@ -84,6 +85,13 @@ describe("share-coder", () => {
     // Empty collections pruned
     expect(cleaned.notes).toBeUndefined();
     expect(cleaned.milestones).toBeUndefined();
+  });
+
+  it("preserves an explicit zero task gap through sharing", () => {
+    const plan: JanttData = { tasks: [{ id: "a", start: "2026-11-02", end: "2026-11-03", gapDays: 0 }] };
+    const cleaned = cleanPlanForSharing(plan);
+    expect(cleaned.tasks[0].gapDays).toBe(0);
+    expect(calculatePlanHash(cleaned)).toBe(calculatePlanHash(plan));
   });
 
   it("compresses plan into a compact 'z~' prefixed base64url payload", () => {

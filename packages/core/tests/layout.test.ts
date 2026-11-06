@@ -21,6 +21,44 @@ const sampleData: JanttData = {
 };
 
 describe("Layout Engine", () => {
+  it("uses the project target date when calculating task float", () => {
+    const data: JanttData = { meta: { targetDate: "2026-08-30" }, tasks: [
+      { id: "a", start: "2026-09-01", end: "2026-09-03" }
+    ] };
+    expect(layout(data).tasks[0].scheduleMetrics?.totalFloat).toBe(-4);
+  });
+  it.each(["orthogonal", "curved", "direct"] as const)("separates parallel links with %s routing", (linkRouting) => {
+    const data: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-04" },
+      { id: "b", start: "2026-11-08", end: "2026-11-09", dependsOn: ["a:FS+0d", "a:FS+1d"] }
+    ] };
+    const { dependencies } = layout(data, { linkRouting });
+    expect(dependencies).toHaveLength(2);
+    expect(dependencies[0].path).not.toBe(dependencies[1].path);
+    expect([dependencies[0].fromX, dependencies[0].fromY, dependencies[0].toX, dependencies[0].toY])
+      .toEqual([dependencies[1].fromX, dependencies[1].fromY, dependencies[1].toX, dependencies[1].toY]);
+  });
+  it("highlights only the driving relationship when two tasks have multiple links", () => {
+    const data: JanttData = { tasks: [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-04" },
+      { id: "b", category: "dev", start: "2026-11-04", end: "2026-11-05", dependsOn: ["a:FS+0d", "a:SS+0d"] }
+    ] };
+    const result = layout(data, { showCriticalPath: true });
+    expect(result.tasks.every((task) => task.isCritical)).toBe(true);
+    expect(result.dependencies.find((dep) => dep.type === "FS")?.isCritical).toBe(true);
+    expect(result.dependencies.find((dep) => dep.type === "SS")?.isCritical).toBe(false);
+  });
+  it("distinguishes critical links whose legacy keys collide", () => {
+    const data: JanttData = { tasks: [
+      { id: "a->b", start: "2026-11-02", end: "2026-11-05" },
+      { id: "c", start: "2026-11-05", end: "2026-11-06", dependsOn: [{ id: "a->b", lag: 0 }] },
+      { id: "a", start: "2026-11-02", end: "2026-11-02" },
+      { id: "b->c", start: "2026-11-02", end: "2026-11-02", dependsOn: [{ id: "a", lag: 0 }] }
+    ] };
+    const result = layout(data, { showCriticalPath: true });
+    expect(result.dependencies.find((dep) => dep.fromTaskId === "a->b")?.isCritical).toBe(true);
+    expect(result.dependencies.find((dep) => dep.fromTaskId === "a")?.isCritical).toBe(false);
+  });
   // ─── Pixel coordinate accuracy ────────────────────────────────────────
 
   it("calculates exact pixel coordinates for task bars", () => {
@@ -101,6 +139,14 @@ describe("Layout Engine", () => {
   });
 
   // ─── Grid header generation ───────────────────────────────────────────
+
+  it("reports the effective default gap for a dependency without an explicit lag", () => {
+    const data: JanttData = { meta: { defaultGapDays: 2 }, tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-05", end: "2026-11-06", dependsOn: "a" }
+    ] };
+    expect(layout(data).dependencies[0].lagDays).toBe(2);
+  });
 
   it("generates grid header ticks for months and days", () => {
     const res = layout(sampleData, { dayWidth: 30 });

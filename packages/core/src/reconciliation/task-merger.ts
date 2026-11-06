@@ -1,5 +1,17 @@
 import { Task } from "../types";
 import { compareCompositeTimestamps } from "./timestamps";
+import { getTaskDependencyRelations } from "../dependencies";
+
+export function stableJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+}
+
+export function dependencySignature(task: Task): string {
+  return JSON.stringify(getTaskDependencyRelations(task).map((rel) =>
+    [rel.id, rel.type, rel.lagDays, Boolean(rel.explicitZeroLag)]
+  ).map((rel) => JSON.stringify(rel)).sort());
+}
 
 export const PM_TASK_FIELDS: Array<keyof Task> = [
   "label",
@@ -14,6 +26,11 @@ export const PM_TASK_FIELDS: Array<keyof Task> = [
   "assignees",
   "dependsOn",
   "gapDays",
+  "minGapDays",
+  "calendar",
+  "calendarId",
+  "allocation",
+  "fields",
   "notes",
   "color",
   "priority",
@@ -38,9 +55,12 @@ export function areTasksIdentical(t1: Task, t2: Task): boolean {
   if ((t1.status || "not-started") !== (t2.status || "not-started")) return false;
   if ((t1.category || "") !== (t2.category || "")) return false;
   if ((t1.assignee || t1.person || "") !== (t2.assignee || t2.person || "")) return false;
-  if (String(t1.dependsOn || "") !== String(t2.dependsOn || "")) return false;
+  if (dependencySignature(t1) !== dependencySignature(t2)) return false;
   if ((t1.notes || "") !== (t2.notes || "")) return false;
-  if ((t1.gapDays ?? 0) !== (t2.gapDays ?? 0)) return false;
+  if ((t1.gapDays ?? null) !== (t2.gapDays ?? null)) return false;
+  if ((t1.minGapDays ?? null) !== (t2.minGapDays ?? null)) return false;
+  if (stableJson(t1.calendar) !== stableJson(t2.calendar) || t1.calendarId !== t2.calendarId) return false;
+  if (t1.allocation !== t2.allocation || stableJson(t1.fields) !== stableJson(t2.fields)) return false;
   if ((t1.color || "") !== (t2.color || "")) return false;
   if (Boolean(t1.locked) !== Boolean(t2.locked)) return false;
   if (Boolean(t1.milestone) !== Boolean(t2.milestone)) return false;

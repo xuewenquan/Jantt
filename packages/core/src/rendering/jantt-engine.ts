@@ -2,7 +2,7 @@ import { JanttData, JanttOptions, Task, TimeScale, LinkRoutingStyle, RowHeightMo
 import { layout, computeDependencyPath, getScaleFromDayWidth, SCALE_DAY_WIDTHS } from "../layout";
 import { InteractionController } from "../controller";
 import { createTaskSidebar } from "../sidebar";
-import { resolveSchedule, calculateCriticalPath } from "../resolver";
+import { resolveSchedule, calculateCriticalPath, getScheduleContext } from "../resolver";
 import { clampDayWidth } from "../utils";
 import { DEFAULT_GAP_DAYS, DEFAULT_ROW_HEIGHT, DEFAULT_LABEL_WIDTH } from "../constants";
 import {
@@ -18,6 +18,7 @@ import {
 } from "../renderers";
 import { ViewportCoordinator, ViewportCoordinationState } from "./viewport-coordinator";
 import { TaskScheduleCoordinator } from "./task-schedule-coordinator";
+import { CalendarError } from "../calendar";
 
 export interface JanttInstance {
   update: (data: JanttData, options?: Partial<JanttOptions>) => void;
@@ -48,14 +49,34 @@ export class JanttRendererEngine {
   private lastObservedHeight = 0;
   private resizeTimer: number | null = null;
   private todayTimer: ReturnType<typeof setInterval> | null = null;
+  private lastCriticalError = "";
+
+  private runScheduleChange(action: () => void): void {
+    try { action(); }
+    catch (error) {
+      if (!(error instanceof CalendarError)) throw error;
+      this.currentOptions.onError?.(error);
+    }
+  }
+
+  private resolveTasksFor(data: JanttData, options: JanttOptions): Task[] {
+    try {
+      return resolveSchedule(data.tasks || [], data.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS, getScheduleContext(data));
+    } catch (error) {
+      if (!(error instanceof CalendarError)) throw error;
+      this.lastCriticalError = error.message;
+      options.onError?.(error);
+      return (data.tasks || []).map((task) => ({ ...task }));
+    }
+  }
 
   constructor(container: HTMLElement, initialData: JanttData, options: JanttOptions = {}) {
     this.container = container;
+    this.currentOptions = { ...options };
     this.currentData = {
       ...initialData,
-      tasks: resolveSchedule(initialData.tasks || [], initialData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS)
+      tasks: this.resolveTasksFor(initialData, this.currentOptions)
     };
-    this.currentOptions = { ...options };
 
     const initialScale: TimeScale = this.currentOptions.viewport?.scale || this.currentData.meta?.scale || "day";
     const initialDayWidth: number =
@@ -147,6 +168,8 @@ export class JanttRendererEngine {
     this.activeSidebarInstance = createTaskSidebar({
       task,
       allTasks: this.currentData.tasks,
+      defaultGapDays: this.currentData.meta?.defaultGapDays,
+      scheduleContext: getScheduleContext(this.currentData),
       categories: this.currentData.categories || {},
       container: customContainer,
       theme: this.currentOptions.theme,
@@ -157,26 +180,32 @@ export class JanttRendererEngine {
         this.activeSidebarInstance = null;
       },
       onSave: (updatedTask) => {
-        this.currentData = TaskScheduleCoordinator.updateTask(this.currentData, updatedTask);
-        this.render();
-        this.currentOptions.onCommit?.(this.currentData);
+        this.runScheduleChange(() => {
+          this.currentData = TaskScheduleCoordinator.updateTask(this.currentData, updatedTask);
+          this.render();
+          this.currentOptions.onCommit?.(this.currentData);
+        });
       },
       onDelete: (taskId) => {
-        this.currentData = TaskScheduleCoordinator.deleteTask(this.currentData, taskId);
-        this.render();
-        this.currentOptions.onTaskDelete?.(taskId);
-        this.currentOptions.onCommit?.(this.currentData);
+        this.runScheduleChange(() => {
+          this.currentData = TaskScheduleCoordinator.deleteTask(this.currentData, taskId);
+          this.render();
+          this.currentOptions.onTaskDelete?.(taskId);
+          this.currentOptions.onCommit?.(this.currentData);
+        });
       }
     });
   };
 
   private handleAddTask = () => {
-    const { nextData, newTask } = TaskScheduleCoordinator.createTask(this.currentData);
-    this.currentData = nextData;
-    this.render();
-    this.openTaskSidebar(newTask);
-    this.currentOptions.onTaskAdd?.(newTask);
-    this.currentOptions.onCommit?.(this.currentData);
+    this.runScheduleChange(() => {
+      const { nextData, newTask } = TaskScheduleCoordinator.createTask(this.currentData);
+      this.currentData = nextData;
+      this.render();
+      this.openTaskSidebar(newTask);
+      this.currentOptions.onTaskAdd?.(newTask);
+      this.currentOptions.onCommit?.(this.currentData);
+    });
   };
 
   public render = () => {
@@ -188,7 +217,18 @@ export class JanttRendererEngine {
       prevScrollWrap !== null && this.state.renderedStartDate !== "" && this.state.renderedDayWidth > 0;
 
     // 1. Compute master critical path across complete schedule graph
-    const masterCriticalResult = calculateCriticalPath(this.currentData.tasks);
+    const masterCriticalResult = calculateCriticalPath(this.currentData.tasks, {
+      defaultGapDays: this.currentData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS,
+      targetDate: this.currentData.meta?.targetDate,
+      calendar: this.currentData.meta?.calendar,
+      useWorkingDays: this.currentData.meta?.useWorkingDays,
+      calendars: this.currentData.calendars,
+      people: this.currentData.people
+    });
+    const criticalError = masterCriticalResult.errors?.join("; ") || "";
+    const isNewCriticalError = criticalError && criticalError !== this.lastCriticalError;
+    this.lastCriticalError = criticalError;
+    if (isNewCriticalError) this.currentOptions.onError?.(new Error(criticalError));
     this.root.classList.toggle("jantt-show-critical", this.state.showCritical);
 
     // 2. Filter tasks for display
@@ -466,15 +506,19 @@ export class JanttRendererEngine {
     if (todayLine) gridContainer.appendChild(todayLine);
 
     // 11. Render SVG Dependency Connectors & Preview Wire
+    const lockedTaskIds = new Set(this.currentData.tasks.filter((task) => task.locked).map((task) => task.id));
     const { svg, previewWireSvg: pWire, depPathElements } = renderDependencyLinks({
       dependencies,
       canvasWidth,
       canvasHeight,
       showCritical: this.state.showCritical,
-      onLinkDelete: (fromId, toId) => {
-        this.currentData = TaskScheduleCoordinator.removeDependency(this.currentData, fromId, toId);
-        this.render();
-        this.currentOptions.onCommit?.(this.currentData);
+      canDelete: (dependency) => !lockedTaskIds.has(dependency.toTaskId),
+      onLinkDelete: this.currentOptions.readOnly ? undefined : (fromId, toId, relationshipIndex) => {
+        this.runScheduleChange(() => {
+          this.currentData = TaskScheduleCoordinator.removeDependency(this.currentData, fromId, toId, relationshipIndex);
+          this.render();
+          this.currentOptions.onCommit?.(this.currentData);
+        });
       }
     });
     this.previewWireSvg = pWire;
@@ -560,9 +604,10 @@ export class JanttRendererEngine {
 
     return {
       update: (newData, newOpts) => {
+        const nextOptions = newOpts ? { ...this.currentOptions, ...newOpts } : this.currentOptions;
         this.currentData = {
           ...newData,
-          tasks: resolveSchedule(newData.tasks || [], newData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS)
+          tasks: this.resolveTasksFor(newData, nextOptions)
         };
         if (newOpts) {
           this.currentOptions = { ...this.currentOptions, ...newOpts };

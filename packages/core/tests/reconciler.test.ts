@@ -3,6 +3,71 @@ import { calculatePlanHash, reconcilePlans, purgeTombstones, maintainPlanData } 
 import { JanttData } from "../src/types";
 
 describe("Deterministic Plan Hash & 3-Way Reconciler Engine", () => {
+  it("detects relationship, calendar and resource allocation changes", () => {
+    const plan: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-02", end: "2026-11-03", dependsOn: [{ id: "a", type: "FS", lag: 0 }], calendar: "standard", allocation: 0.5 }
+    ] };
+    const change = (patch: Partial<JanttData["tasks"][number]>): JanttData => ({ ...plan, tasks: [plan.tasks[0], { ...plan.tasks[1], ...patch }] });
+    const hash = calculatePlanHash(plan);
+    expect(calculatePlanHash(change({ dependsOn: [{ id: "a", type: "SS", lag: 0 }] }))).not.toBe(hash);
+    expect(calculatePlanHash(change({ dependsOn: [{ id: "a", type: "FS" }] }))).not.toBe(hash);
+    expect(calculatePlanHash(change({ calendar: "continuous" }))).not.toBe(hash);
+    expect(calculatePlanHash(change({ allocation: 1 }))).not.toBe(hash);
+    expect(calculatePlanHash({ ...plan, calendars: { special: { holidays: ["2026-11-03"] } } })).not.toBe(hash);
+    const edited = change({ dependsOn: [{ id: "a", type: "FF", lag: -1 }], allocation: 0.75 });
+    const merged = reconcilePlans(plan, plan, edited).mergedData.tasks.find((t) => t.id === "b")!;
+    expect(merged.dependsOn).toEqual(edited.tasks[1].dependsOn);
+    expect(merged.allocation).toBe(0.75);
+  });
+
+  it("merges calendar changes alongside concurrent task edits", () => {
+    const base: JanttData = {
+      meta: { calendar: "standard", useWorkingDays: true },
+      calendars: { custom: { workingDays: [1, 2, 3, 4, 5] } },
+      people: [{ id: "alice", name: "Alice", calendar: "standard" }],
+      tasks: [{ id: "a", start: "2026-11-02", end: "2026-11-03", label: "Before" }]
+    };
+    const calendarEdit: JanttData = {
+      ...base, meta: { ...base.meta, calendar: "continuous" },
+      calendars: { custom: { workingDays: [1, 2, 3, 4] } },
+      people: [{ id: "alice", name: "Alice", calendar: "continuous" }]
+    };
+    const taskEdit: JanttData = { ...base, tasks: [{ ...base.tasks[0], label: "After" }] };
+    for (const [local, remote] of [[calendarEdit, taskEdit], [taskEdit, calendarEdit]]) {
+      const merged = reconcilePlans(base, local, remote).mergedData;
+      expect(merged.meta?.calendar).toBe("continuous");
+      expect(merged.calendars?.custom.workingDays).toEqual([1, 2, 3, 4]);
+      expect(merged.people?.[0].calendar).toBe("continuous");
+      expect(merged.tasks[0].label).toBe("After");
+    }
+  });
+
+  it("merges target date changes alongside concurrent task edits", () => {
+    const base: JanttData = { meta: { targetDate: "2026-10-01" }, tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03", label: "Before" }
+    ] };
+    const local: JanttData = { ...base, tasks: [{ ...base.tasks[0], label: "After" }] };
+    const remote: JanttData = { ...base, meta: { ...base.meta, targetDate: "2026-12-01" } };
+    expect(calculatePlanHash(remote)).not.toBe(calculatePlanHash(base));
+    for (const [a, b] of [[local, remote], [remote, local]]) {
+      const merged = reconcilePlans(base, a, b).mergedData;
+      expect(merged.meta?.targetDate).toBe("2026-12-01");
+      expect(merged.tasks[0].label).toBe("After");
+    }
+  });
+
+  it("preserves capacity changes alongside concurrent task edits", () => {
+    const base: JanttData = { meta: { resourceCapacities: { alice: 0.5 }, defaultResourceCapacity: 1 }, tasks: [
+      { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03", label: "Before" }
+    ] };
+    const local: JanttData = { ...base, meta: { ...base.meta, resourceCapacities: { alice: 0.75 } } };
+    const remote: JanttData = { ...base, meta: { ...base.meta, resourceCapacities: { alice: 0.5, bob: 0.5 } }, tasks: [{ ...base.tasks[0], label: "After" }] };
+    expect(calculatePlanHash(local)).not.toBe(calculatePlanHash(base));
+    const merged = reconcilePlans(base, local, remote).mergedData;
+    expect(merged.meta?.resourceCapacities).toEqual({ alice: 0.75, bob: 0.5 });
+    expect(merged.tasks[0].label).toBe("After");
+  });
   const basePlan: JanttData = {
     meta: {
       title: "Shared Product Roadmap",
@@ -614,6 +679,19 @@ describe("Deterministic Plan Hash & 3-Way Reconciler Engine", () => {
     // t3 had dependsOn: ["t1", "t2"] -> should now be "t2"
     const t3 = res.mergedData.tasks.find((t) => t.id === "t3");
     expect(t3?.dependsOn).toBe("t2");
+  });
+
+  it("preserves structured relationships and hyphenated IDs during merge and maintenance", () => {
+    const plan: JanttData = {
+      tasks: [
+        { id: "task-1", start: "2026-09-01", end: "2026-09-02" },
+        { id: "task-2", start: "2026-09-01", end: "2026-09-02" },
+        { id: "task-3", start: "2026-09-01", end: "2026-09-02", dependsOn: ["task-1:SS+0d", { id: "task-2", type: "FF", lag: -2 }] }
+      ]
+    };
+    const merged = reconcilePlans(plan, plan, plan).mergedData;
+    expect(merged.tasks.find((t) => t.id === "task-3")?.dependsOn).toEqual(plan.tasks[2].dependsOn);
+    expect(maintainPlanData(merged).tasks.find((t) => t.id === "task-3")?.dependsOn).toEqual(plan.tasks[2].dependsOn);
   });
 
   it("performs autonomous JSON maintenance: prunes expired tombstones, caps bloat, strips empty timestamps", () => {

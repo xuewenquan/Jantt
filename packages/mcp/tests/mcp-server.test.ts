@@ -65,6 +65,16 @@ describe("@jantt/mcp Model Context Protocol Server", () => {
   });
 
   describe("jantt_audit_schedule", () => {
+    it("reports a cyclic schedule instead of returning a misleading health score", () => {
+      const plan = { tasks: [
+        { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "b" },
+        { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "a" }
+      ] };
+      const res = executeTool("jantt_audit_schedule", { planJson: JSON.stringify(plan) }) as any;
+      expect(res.valid).toBe(false);
+      expect(res.analysisErrors[0]).toMatch(/circular/i);
+      expect(res.integrityScore).toBeUndefined();
+    });
     it("runs DCMA-14 schedule health checks", () => {
       const res = executeTool("jantt_audit_schedule", { planJson: JSON.stringify(basicJson) }) as any;
       expect(res.valid).toBe(true);

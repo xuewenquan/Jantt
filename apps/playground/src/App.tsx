@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from "react";
-import { validate, calculatePlanHash, type JanttData } from "@jantt/core";
+import { validate, calculatePlanHash, getScheduleContext, DEFAULT_GAP_DAYS, type JanttData } from "@jantt/core";
 
 // Re-export all types, constants, and utilities for external consumers
 export type {
@@ -1038,6 +1038,7 @@ export function App() {
           const html = exportExecutiveReportHtml(editor.parsedData.tasks, {
             title: project.currentProjectName || "Executive Project Status Report",
             projectCode: project.activeProjectId || "PROJ-1",
+            cpmOptions: { ...getScheduleContext(editor.parsedData), defaultGapDays: editor.parsedData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS, targetDate: editor.parsedData.meta?.targetDate },
             theme: viewport.activeTheme?.mode === "dark" ? "dark" : "corporate"
           });
           const blob = new Blob([html], { type: "text/html" });

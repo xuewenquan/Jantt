@@ -7,6 +7,7 @@ import {
   getTodayISODate,
   addDays,
   resolveSchedule,
+  getScheduleContext,
   resolveTaskAssignee,
   validate,
   syncTaskProgressAndStatus
@@ -191,7 +192,7 @@ export function useTaskActions({
     };
 
     const nextTasks = [...activeTasks, newTask];
-    const resolved = resolveSchedule(nextTasks, parsedData.meta?.defaultGapDays ?? 2);
+    const resolved = resolveSchedule(nextTasks, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
     const updated = {
       ...parsedData,
       meta: {

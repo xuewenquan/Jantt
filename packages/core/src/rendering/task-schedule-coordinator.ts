@@ -1,10 +1,18 @@
 import { JanttData, Task } from "../types";
 import { getTodayISODate, addDays } from "../date-math";
-import { getTaskDependencies } from "../resolver";
+import { getScheduleContext } from "../resolver";
+import { filterDependencies, getTaskDependencyRelations, removeDependencyAt } from "../dependencies";
 import { DEFAULT_GAP_DAYS } from "../constants";
 import { SchedulePipeline } from "../pipeline";
+import { CalendarError } from "../calendar";
 
 const defaultPipeline = SchedulePipeline.createDefault();
+
+function resolveTasks(tasks: Task[], data: JanttData, defaultGapDays: number): Task[] {
+  const result = defaultPipeline.execute(tasks, { ...getScheduleContext(data), defaultGapDays });
+  if (result.context.fatalError) throw new CalendarError(result.context.fatalError);
+  return result.tasks;
+}
 
 export class TaskScheduleCoordinator {
   /**
@@ -34,7 +42,7 @@ export class TaskScheduleCoordinator {
     };
 
     const nextTasks = [...currentData.tasks, newTask];
-    const resolved = defaultPipeline.execute(nextTasks, { defaultGapDays: defaultGap }).tasks;
+    const resolved = resolveTasks(nextTasks, currentData, defaultGap);
     return {
       nextData: { ...currentData, tasks: resolved },
       newTask
@@ -47,7 +55,7 @@ export class TaskScheduleCoordinator {
   public static updateTask(currentData: JanttData, updatedTask: Task): JanttData {
     const defaultGap = currentData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS;
     const nextTasks = currentData.tasks.map((t) => (t.id === updatedTask.id ? updatedTask : t));
-    const resolved = defaultPipeline.execute(nextTasks, { defaultGapDays: defaultGap }).tasks;
+    const resolved = resolveTasks(nextTasks, currentData, defaultGap);
     return { ...currentData, tasks: resolved };
   }
 
@@ -57,37 +65,26 @@ export class TaskScheduleCoordinator {
    */
   public static deleteTask(currentData: JanttData, taskId: string): JanttData {
     const defaultGap = currentData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS;
-    const nextTasks = currentData.tasks.filter((t) => t.id !== taskId);
-    nextTasks.forEach((t) => {
-      const remaining = getTaskDependencies(t).filter((id) => id !== taskId);
-      if (remaining.length === 0) {
-        t.dependsOn = null;
-      } else if (remaining.length === 1) {
-        t.dependsOn = remaining[0];
-      } else {
-        t.dependsOn = remaining;
-      }
-    });
-    const resolved = defaultPipeline.execute(nextTasks, { defaultGapDays: defaultGap }).tasks;
+    const nextTasks = currentData.tasks.filter((t) => t.id !== taskId).map((t) => ({ ...t, dependsOn: filterDependencies(t.dependsOn, (id) => id !== taskId) }));
+    const resolved = resolveTasks(nextTasks, currentData, defaultGap);
     return { ...currentData, tasks: resolved };
   }
 
   /**
    * Removes a single dependency edge between two tasks and cascades downstream dates.
    */
-  public static removeDependency(currentData: JanttData, fromId: string, toId: string): JanttData {
+  public static removeDependency(currentData: JanttData, fromId: string, toId: string, relationshipIndex?: number): JanttData {
     const targetTask = currentData.tasks.find((t) => t.id === toId);
     if (!targetTask) return currentData;
+    if (relationshipIndex !== undefined && getTaskDependencyRelations(targetTask)[relationshipIndex]?.id !== fromId) return currentData;
 
     const defaultGap = currentData.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS;
-    const currentDeps = getTaskDependencies(targetTask);
-    const nextDeps = currentDeps.filter((id) => id !== fromId);
     const updatedTask = {
       ...targetTask,
-      dependsOn: nextDeps.length === 0 ? null : nextDeps.length === 1 ? nextDeps[0] : nextDeps
+      dependsOn: relationshipIndex === undefined ? filterDependencies(targetTask.dependsOn, (id) => id !== fromId) : removeDependencyAt(targetTask.dependsOn, relationshipIndex)
     };
     const nextTasks = currentData.tasks.map((t) => (t.id === toId ? updatedTask : t));
-    const resolved = defaultPipeline.execute(nextTasks, { defaultGapDays: defaultGap }).tasks;
+    const resolved = resolveTasks(nextTasks, currentData, defaultGap);
     return { ...currentData, tasks: resolved };
   }
 }

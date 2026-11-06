@@ -1,5 +1,7 @@
 import { JanttData } from "./types";
 import { diffDays } from "./date-math";
+import { formatDependency, getRelationLag, getTaskDependencyRelations } from "./dependencies";
+import { DEFAULT_GAP_DAYS } from "./constants";
 
 /**
  * Serializes JanttData into RFC-4180 compliant CSV format.
@@ -29,6 +31,14 @@ export function exportToCsv(data: JanttData): string {
     const duration = Math.max(diffDays(t.start, t.end), 0);
     const progressPct = t.progress !== undefined && t.progress !== null ? `${Math.round(t.progress * 100)}%` : "";
     const isMilestone = Boolean(t.milestone || duration === 0);
+    const relations = getTaskDependencyRelations(t);
+    const dependsOn = relations.some((relation) => /[,;]/.test(relation.id))
+      ? `json:${JSON.stringify(relations.map((relation) => ({
+          id: relation.id,
+          type: relation.type,
+          lagDays: getRelationLag(relation, t, data.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS)
+        })))}`
+      : relations.map(formatDependency).join("; ");
 
     return [
       escapeCsv(t.id),
@@ -43,7 +53,7 @@ export function exportToCsv(data: JanttData): string {
       t.estimatedCost !== undefined && t.estimatedCost !== null ? String(t.estimatedCost) : "",
       escapeCsv(progressPct),
       isMilestone ? "TRUE" : "FALSE",
-      escapeCsv(Array.isArray(t.dependsOn) ? t.dependsOn.map((d) => (typeof d === "string" ? d : d.id)).join("; ") : (typeof t.dependsOn === "string" ? t.dependsOn : (t.dependsOn?.id || ""))),
+      escapeCsv(dependsOn),
       escapeCsv(t.status || ""),
       escapeCsv(t.notes || "")
     ].join(",");

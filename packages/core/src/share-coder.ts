@@ -41,7 +41,6 @@ export function cleanPlanForSharing(data: JanttData): JanttData {
         if (copy.notes === "") delete copy.notes;
         if (copy.color === "") delete copy.color;
         if (copy.priority === "") delete copy.priority;
-        if (copy.gapDays === 0) delete copy.gapDays;
         if (copy.milestone === false) delete copy.milestone;
         if (copy.urgent === false) delete copy.urgent;
         if (copy.locked === false) delete copy.locked;

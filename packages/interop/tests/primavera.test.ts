@@ -47,7 +47,7 @@ describe("Oracle Primavera P6 XER Interoperability", () => {
     expect(m1?.progress).toBe(1.0);
 
     const m2 = parsed.tasks.find((t) => t.id === "M2");
-    expect(m2?.dependsOn).toBe("M1");
+    expect(m2?.dependsOn).toEqual([{ id: "M1", type: "FS", lagDays: 2 }]);
 
     const m3 = parsed.tasks.find((t) => t.id === "M3");
     expect(m3?.dependsOn).toEqual([{ id: "M2", type: "SS", lagDays: 1 }]);

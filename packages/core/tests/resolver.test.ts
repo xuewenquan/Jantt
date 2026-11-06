@@ -1,5 +1,55 @@
 import { describe, it, expect } from "vitest";
 import { resolveSchedule, calculateCriticalPath, hasDependencyCycle } from "../src/resolver";
+
+describe("critical path enumeration at scale", () => {
+  it("reports an invalid target date instead of computing float from a fallback date", () => {
+    const result = calculateCriticalPath([{ id: "a", start: "2026-09-01", end: "2026-09-03" }], { targetDate: "2026-02-30" });
+    expect(result.errors?.[0]).toMatch(/invalid target date/i);
+    expect(result.metrics.size).toBe(0);
+  });
+  it("evaluates many parallel relationships without losing their individual lags", () => {
+    const tasks = [
+      { id: "a", start: "2026-01-01", end: "2026-01-02" },
+      { id: "b", start: "2026-01-01", end: "2026-01-02", dependsOn: Array.from({ length: 1000 }, (_, i) => ({ id: "a", type: "FS" as const, lag: i % 12 })) }
+    ];
+    const result = calculateCriticalPath(tasks);
+    expect(result.metrics.get("b")?.earlyStart).toBe("2026-01-13");
+    expect(result.metrics.get("a")?.freeFloat).toBe(0);
+    expect(result.criticalRelationKeys?.size).toBe(1);
+    expect(result.criticalPaths).toEqual([["a", "b"]]);
+  });
+  it("cascades a long reverse-ordered chain in dependency order", () => {
+    const tasks = Array.from({ length: 5000 }, (_, i) => ({
+      id: `t${i}`, category: "dev", start: "2026-01-01", end: "2026-01-02",
+      ...(i ? { dependsOn: `t${i - 1}` } : {})
+    })).reverse();
+    const result = resolveSchedule(tasks, 0);
+    expect(result[0].start).toBe("2039-09-09");
+    expect(result[0].end).toBe("2039-09-10");
+  });
+  it("bounds path enumeration while preserving the complete critical graph", () => {
+    const tasks = Array.from({ length: 20 }, (_, level) => [0, 1].map((column) => ({
+      id: `n${level}-${column}`, category: "dev", start: "2026-01-01", end: "2026-01-01",
+      ...(level ? { dependsOn: [`n${level - 1}-0`, `n${level - 1}-1`] } : {})
+    }))).flat();
+    const result = calculateCriticalPath(tasks, { maxCriticalPaths: 10 });
+    expect(result.criticalPaths).toHaveLength(10);
+    expect(result.criticalPathsTruncated).toBe(true);
+    expect(result.criticalTaskIds.size).toBe(40);
+    expect(result.criticalDepKeys.size).toBe(76);
+  });
+
+  it("handles a long chain without recursive stack overflow", () => {
+    const tasks = Array.from({ length: 12000 }, (_, i) => ({
+      id: `n${i}`, category: "dev", start: "2026-01-01", end: "2026-01-01",
+      ...(i ? { dependsOn: `n${i - 1}` } : {})
+    }));
+    const result = calculateCriticalPath(tasks);
+    expect(result.criticalPaths).toHaveLength(1);
+    expect(result.criticalPaths[0]).toHaveLength(12000);
+    expect(result.criticalPathsTruncated).toBe(false);
+  });
+});
 import { Task } from "../src/types";
 import constructionJson from "../../../examples/construction-enterprise.json";
 
@@ -196,6 +246,15 @@ describe("Schedule Resolver", () => {
     const resolved = resolveSchedule(tasks, 2);
     expect(resolved).toHaveLength(1);
     expect(resolved[0].start).toBe("2026-09-01");
+  });
+
+  it("ignores a self-dependency without disabling other cascades", () => {
+    const tasks: Task[] = [
+      { id: "A", category: "dev", start: "2026-09-01", end: "2026-09-05", dependsOn: "A" },
+      { id: "B", category: "dev", start: "2026-09-01", end: "2026-09-02", dependsOn: "A" }
+    ];
+    expect(resolveSchedule(tasks, 0).find((task) => task.id === "B")?.start).toBe("2026-09-05");
+    expect(calculateCriticalPath(tasks).errors || []).toEqual([]);
   });
 
   // ─── Real-world fixture ───────────────────────────────────────────────

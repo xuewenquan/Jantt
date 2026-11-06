@@ -24,6 +24,78 @@ import brokenDanglingDepJson from "../../../examples/broken-dangling-dependency.
  * valid data flows through the entire system without errors.
  */
 describe("Full Pipeline Integration", () => {
+  it("reports a failed calendar edit without committing it", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const onCommit = vi.fn();
+    const onError = vi.fn();
+    const chart = renderJantt(container, { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" }
+    ] }, { onCommit, onError, renderDetail: (_task, _element, api) => api.updateTask({ calendarId: "missing" }) });
+    container.querySelector<HTMLElement>('[data-row-id="a"]')!.click();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0][0].message).toMatch(/unknown calendar.*missing/i);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(chart.getData().tasks[0].calendarId).toBeUndefined();
+    chart.destroy();
+    container.remove();
+  });
+
+  it("reports an unknown calendar on mount without throwing", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const onError = vi.fn();
+    const chart = renderJantt(container, { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03", calendarId: "missing" }
+    ] }, { onError });
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0][0].message).toMatch(/unknown calendar.*missing/i);
+    chart.destroy();
+    container.remove();
+  });
+  it("uses the project target date in the rendered chart", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const chart = renderJantt(container, { meta: { targetDate: "2026-08-30" }, tasks: [
+      { id: "a", start: "2026-09-01", end: "2026-09-03" }
+    ] });
+    container.querySelector<HTMLElement>(".jantt-task-bar")!.dispatchEvent(new MouseEvent("mouseenter"));
+    expect(document.querySelector(".jantt-hover-card")?.textContent).toContain("Overdue by 4d");
+    chart.destroy();
+    container.remove();
+  });
+  it("does not delete dependency links in read-only mode", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const data: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-03", end: "2026-11-04", dependsOn: "a:FS+0d" }
+    ] };
+    const onCommit = vi.fn();
+    const chart = renderJantt(container, data, { readOnly: true, onCommit });
+    const link = container.querySelector<SVGPathElement>(".jantt-dep-path")!;
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(chart.getData().tasks[1].dependsOn).toBe("a:FS+0d");
+    chart.destroy();
+    container.remove();
+  });
+  it("does not delete a dependency of a locked task", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const data: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-03" },
+      { id: "b", start: "2026-11-03", end: "2026-11-04", dependsOn: "a:FS+0d", locked: true }
+    ] };
+    const onCommit = vi.fn();
+    const chart = renderJantt(container, data, { onCommit });
+    const link = container.querySelector<SVGPathElement>(".jantt-dep-path")!;
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(chart.getData().tasks[1].dependsOn).toBe("a:FS+0d");
+    chart.destroy();
+    container.remove();
+  });
   const validFixtures: Array<{ name: string; data: any }> = [
     { name: "basic.json", data: basicJson },
     { name: "academic-roadmap.json", data: academicJson },
@@ -309,6 +381,20 @@ describe("Stress & Boundary Tests", () => {
 
     tooltip.hide();
     expect(document.querySelector(".jantt-hover-card")).toBeNull();
+  });
+
+  it("shows the actual float for critical tasks with target dates", () => {
+    const task: Task = { id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03" };
+    const tooltip = createTooltipController();
+    const category = { label: "Development", color: "#3B82F6" };
+    const event = { clientX: 100, clientY: 100 } as MouseEvent;
+    const negative = calculateCriticalPath([task], { targetDate: "2026-08-30" }).metrics.get("a")!;
+    tooltip.show(task, category, event, negative);
+    expect(document.querySelector(".jantt-hover-card")?.textContent).toContain("Overdue by 4d");
+    const positive = calculateCriticalPath([task], { targetDate: "2026-09-06" }).metrics.get("a")!;
+    tooltip.show(task, category, event, positive);
+    expect(document.querySelector(".jantt-hover-card")?.textContent).toContain("Critical Path (3d buffer)");
+    tooltip.hide();
   });
 
   it("renders low-opacity horizontal row boundaries and vertical day column boundaries across the entire timeline", () => {

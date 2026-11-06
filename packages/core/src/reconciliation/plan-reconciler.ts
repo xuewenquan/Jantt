@@ -1,7 +1,8 @@
 import { JanttData, Task, NoteItem, Person, Team, ReconcileResult, ConflictRecord } from "../types";
 import { compareCompositeTimestamps } from "./timestamps";
 import { calculatePlanHash } from "./crdt-hash";
-import { areTasksIdentical, getLatestTaskTimestamp, PM_TASK_FIELDS } from "./task-merger";
+import { areTasksIdentical, getLatestTaskTimestamp, PM_TASK_FIELDS, stableJson } from "./task-merger";
+import { filterDependencies } from "../dependencies";
 
 /**
  * Commutative & Associative State-Based CRDT & 3-Way Task Reconciler.
@@ -537,31 +538,46 @@ export function reconcilePlans(
   }
 
   for (const t of mergedTasks) {
-    if (!t.dependsOn) continue;
-    if (Array.isArray(t.dependsOn)) {
-      const remaining = t.dependsOn.filter(
-        (depId) => typeof depId === "string" && !deletedTaskIds.has(depId.trim())
-      );
-      t.dependsOn = remaining.length === 0 ? null : (remaining.length === 1 ? remaining[0] : remaining);
-    } else if (typeof t.dependsOn === "string") {
-      if (t.dependsOn.includes(",")) {
-        const remaining = t.dependsOn
-          .split(",")
-          .map((s) => s.trim())
-          .filter((depId) => depId.length > 0 && !deletedTaskIds.has(depId));
-        t.dependsOn = remaining.length === 0 ? null : (remaining.length === 1 ? remaining[0] : remaining);
-      } else if (deletedTaskIds.has(t.dependsOn.trim())) {
-        t.dependsOn = null;
-      }
-    }
+    t.dependsOn = filterDependencies(t.dependsOn, (id) => !deletedTaskIds.has(id));
   }
 
   // 6. Union Merge People, Teams, Categories
+  const chooseValue = <T>(baseValue: T | undefined, localValue: T | undefined, remoteValue: T | undefined): T | undefined => {
+    const baseJson = stableJson(baseValue);
+    const localJson = stableJson(localValue);
+    const remoteJson = stableJson(remoteValue);
+    if (localJson === remoteJson) return localValue;
+    if (localJson === baseJson) return remoteValue;
+    if (remoteJson === baseJson) return localValue;
+    return options?.preferRemoteOnConflict !== false ? remoteValue : ((remoteJson || "").localeCompare(localJson || "") > 0 ? remoteValue : localValue);
+  };
   const mergedPeopleMap = new Map<string, Person>();
   (remote.people || []).forEach((p) => mergedPeopleMap.set(p.id, p));
   (local.people || []).forEach((p) => {
-    if (!mergedPeopleMap.has(p.id)) mergedPeopleMap.set(p.id, p);
+    const remotePerson = mergedPeopleMap.get(p.id);
+    if (!remotePerson) {
+      mergedPeopleMap.set(p.id, p);
+    } else {
+      const basePerson = safeBase.people?.find((person) => person.id === p.id);
+      mergedPeopleMap.set(p.id, { ...remotePerson,
+        calendar: chooseValue(basePerson?.calendar, p.calendar, remotePerson.calendar),
+        calendarId: chooseValue(basePerson?.calendarId, p.calendarId, remotePerson.calendarId)
+      });
+    }
   });
+
+  const mergedCalendars: NonNullable<JanttData["calendars"]> = {};
+  const calendarIds = new Set([...Object.keys(safeBase.calendars || {}), ...Object.keys(local.calendars || {}), ...Object.keys(remote.calendars || {})]);
+  for (const id of calendarIds) {
+    const calendar = chooseValue(safeBase.calendars?.[id], local.calendars?.[id], remote.calendars?.[id]);
+    if (calendar) mergedCalendars[id] = calendar;
+  }
+  const mergedCapacities: Record<string, number> = {};
+  const capacityIds = new Set([...Object.keys(safeBase.meta?.resourceCapacities || {}), ...Object.keys(local.meta?.resourceCapacities || {}), ...Object.keys(remote.meta?.resourceCapacities || {})]);
+  for (const id of capacityIds) {
+    const capacity = chooseValue(safeBase.meta?.resourceCapacities?.[id], local.meta?.resourceCapacities?.[id], remote.meta?.resourceCapacities?.[id]);
+    if (capacity !== undefined) mergedCapacities[id] = capacity;
+  }
 
   const mergedTeamsMap = new Map<string, Team>();
   (remote.teams || []).forEach((t) => mergedTeamsMap.set(t.id, t));
@@ -626,6 +642,12 @@ export function reconcilePlans(
     meta: {
       ...remote.meta,
       ...local.meta,
+      calendar: chooseValue(safeBase.meta?.calendar, local.meta?.calendar, remote.meta?.calendar),
+      useWorkingDays: chooseValue(safeBase.meta?.useWorkingDays, local.meta?.useWorkingDays, remote.meta?.useWorkingDays),
+      defaultGapDays: chooseValue(safeBase.meta?.defaultGapDays, local.meta?.defaultGapDays, remote.meta?.defaultGapDays),
+      defaultResourceCapacity: chooseValue(safeBase.meta?.defaultResourceCapacity, local.meta?.defaultResourceCapacity, remote.meta?.defaultResourceCapacity),
+      targetDate: chooseValue(safeBase.meta?.targetDate, local.meta?.targetDate, remote.meta?.targetDate),
+      resourceCapacities: Object.keys(mergedCapacities).length ? mergedCapacities : undefined,
       title: remote.meta?.title || local.meta?.title || "Project Plan",
       revision: nextRevision,
       updatedAt: nowIso,
@@ -639,6 +661,7 @@ export function reconcilePlans(
       }
     },
     categories: mergedCategories,
+    calendars: Object.keys(mergedCalendars).length ? mergedCalendars : undefined,
     people: Array.from(mergedPeopleMap.values()),
     teams: Array.from(mergedTeamsMap.values()),
     notes: finalNotes,
@@ -774,22 +797,7 @@ export function maintainPlanData(
   const activeTasks: Task[] = (data.tasks || [])
     .filter((t) => !t._deleted && !deletedIds.has(t.id))
     .map((t) => {
-      let dependsOn = t.dependsOn;
-      if (dependsOn) {
-        const getDepId = (d: unknown): string => {
-          if (typeof d === "string") return d.split(/[:\+\-]/)[0].trim();
-          if (typeof d === "object" && d !== null && "id" in d) return String((d as { id: unknown }).id).trim();
-          return "";
-        };
-        const deps = Array.isArray(dependsOn)
-          ? dependsOn
-          : String(dependsOn).split(",").map((s) => s.trim()).filter(Boolean);
-        const pruned = deps.filter((d) => {
-          const depId = getDepId(d);
-          return activeTaskIdSet.has(depId) && !deletedIds.has(depId) && depId !== t.id;
-        });
-        dependsOn = pruned.length === 0 ? null : (pruned.length === 1 ? pruned[0] : pruned);
-      }
+      const dependsOn = filterDependencies(t.dependsOn, (id) => activeTaskIdSet.has(id) && !deletedIds.has(id) && id !== t.id);
 
       let fieldTimestamps = t.fieldTimestamps;
       if (fieldTimestamps && Object.keys(fieldTimestamps).length === 0) {

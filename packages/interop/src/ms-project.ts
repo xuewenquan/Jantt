@@ -6,7 +6,7 @@
  */
 
 import type { JanttData, Task, DependencyRelation, DependencyType } from "@jantt/core";
-import { parseDependencyRelation } from "@jantt/core";
+import { getTaskDependencyRelations, getRelationLag, DEFAULT_GAP_DAYS } from "@jantt/core";
 
 export interface MsProjectExportOptions {
   projectName?: string;
@@ -28,21 +28,6 @@ const MS_TO_TYPE: Record<number, DependencyType> = {
   2: "SS",
   3: "SF"
 };
-
-function parseDependencyInput(dep: unknown): DependencyRelation[] {
-  if (!dep) return [];
-  const list = Array.isArray(dep) ? dep : [dep];
-  const result: DependencyRelation[] = [];
-
-  for (const item of list) {
-    const rel = parseDependencyRelation(item);
-    if (rel) {
-      result.push(rel);
-    }
-  }
-
-  return result;
-}
 
 export function exportMsProjectXml(plan: JanttData, options: MsProjectExportOptions = {}): string {
   const tasks = plan.tasks || [];
@@ -101,13 +86,14 @@ export function exportMsProjectXml(plan: JanttData, options: MsProjectExportOpti
       xml += `      <Notes>${escapeXml(`category: ${task.category}`)}</Notes>\n`;
     }
 
-    const deps = parseDependencyInput(task.dependsOn);
+    const deps = getTaskDependencyRelations(task);
     deps.forEach((dep) => {
       const predUid = idToUid.get(dep.id);
       if (predUid !== undefined) {
         const msType = TYPE_TO_MS[dep.type] ?? 1;
         // In MS Project XML, lag in days is represented in tenths of minute: 1 day = 8 hr * 60 min * 10 = 4800
-        const linkLag = (dep.lagDays || 0) * 4800;
+        const lag = getRelationLag(dep, task, plan.meta?.defaultGapDays ?? DEFAULT_GAP_DAYS);
+        const linkLag = lag * 4800;
         xml += `      <PredecessorLink>\n`;
         xml += `        <PredecessorUID>${predUid}</PredecessorUID>\n`;
         xml += `        <Type>${msType}</Type>\n`;
@@ -234,9 +220,7 @@ export function importMsProjectXml(xmlString: string): JanttData {
           });
         }
       }
-      if (deps.length === 1 && deps[0].type === "FS" && !deps[0].lagDays) {
-        task.dependsOn = deps[0].id;
-      } else if (deps.length > 0) {
+      if (deps.length > 0) {
         task.dependsOn = deps;
       }
     }

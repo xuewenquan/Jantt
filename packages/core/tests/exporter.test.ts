@@ -31,6 +31,18 @@ const mockData: JanttData = {
 };
 
 describe("Exporter Engine", () => {
+  it("includes relationship types and zero or negative lags in CSV", () => {
+    const data: JanttData = { tasks: [{ id: "b", category: "dev", start: "2026-09-01", end: "2026-09-02", dependsOn: [{ id: "a", type: "SS", lag: 0 }, { id: "c", type: "FF", lagDays: -2 }] }] };
+    expect(exportToCsv(data)).toContain("a:SS+0d; c:FF-2d");
+  });
+
+  it("encodes delimiter-containing predecessor IDs as JSON for a lossless round trip", () => {
+    const csv = exportToCsv({ tasks: [
+      { id: "a,b", start: "2026-11-02", end: "2026-11-03" },
+      { id: "c", start: "2026-11-04", end: "2026-11-05", dependsOn: [{ id: "a,b", type: "SS" as const, lagDays: 1 }] }
+    ] });
+    expect(csv.replace(/""/g, '"')).toContain('json:[{"id":"a,b","type":"SS","lagDays":1}]');
+  });
   // ─── CSV header and rows ──────────────────────────────────────────────
 
   it("exports valid RFC-4180 CSV with headers and task rows", () => {

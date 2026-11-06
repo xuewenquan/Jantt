@@ -47,7 +47,7 @@ describe("Microsoft Project XML Interoperability", () => {
 
     expect(parsed.tasks[1].label).toBe("Avionics Integration");
     expect(parsed.tasks[1].progress).toBe(0.5);
-    expect(parsed.tasks[1].dependsOn).toBe("t1");
+    expect(parsed.tasks[1].dependsOn).toEqual([{ id: "t1", type: "FS", lagDays: 2 }]);
 
     expect(parsed.tasks[2].label).toBe("Cryogenic Static Fire");
     expect(parsed.tasks[2].dependsOn).toEqual([{ id: "t2", type: "FS", lagDays: 2 }]);

@@ -13,7 +13,7 @@ import type { JanttData, Task } from "./types.js";
 import type { SchedulePipelineOptions } from "./pipeline/schedule-pipeline.js";
 import type { MonteCarloOptions, MonteCarloResult } from "./monte-carlo.js";
 import type { ResourceLevelingOptions, LevelingResult } from "./resource-leveler.js";
-import { resolveSchedule } from "./resolver.js";
+import { resolveSchedule, getScheduleContext } from "./resolver.js";
 import { runMonteCarloSimulation } from "./monte-carlo.js";
 import { levelResources } from "./resource-leveler.js";
 
@@ -111,9 +111,10 @@ export function createScheduleWorkerClient(customWorkerUrl?: string): ScheduleWo
 
   return {
     resolveSchedule: (input: JanttData | Task[], options?: SchedulePipelineOptions): Promise<any> => {
-      return dispatch("RESOLVE_SCHEDULE", { input, options }, () => {
+      const merged = { ...(Array.isArray(input) ? {} : { ...getScheduleContext(input), defaultGapDays: input.meta?.defaultGapDays }), ...options };
+      return dispatch("RESOLVE_SCHEDULE", { input, options: merged }, () => {
         const tasks = extractTasks(input);
-        const resolvedTasks = resolveSchedule(tasks, options?.defaultGapDays);
+        const resolvedTasks = resolveSchedule(tasks, merged.defaultGapDays, merged);
         if (Array.isArray(input)) return resolvedTasks;
         return { ...input, tasks: resolvedTasks };
       });
@@ -127,9 +128,10 @@ export function createScheduleWorkerClient(customWorkerUrl?: string): ScheduleWo
     },
 
     levelResources: (input: JanttData | Task[], options?: ResourceLevelingOptions): Promise<LevelingResult> => {
-      return dispatch("LEVEL_RESOURCES", { input, options }, () => {
+      const merged = { ...(Array.isArray(input) ? {} : { ...getScheduleContext(input), defaultGapDays: input.meta?.defaultGapDays, targetDate: input.meta?.targetDate, defaultCapacity: input.meta?.defaultResourceCapacity, resourceCapacities: input.meta?.resourceCapacities }), ...options };
+      return dispatch("LEVEL_RESOURCES", { input, options: merged }, () => {
         const tasks = extractTasks(input);
-        return levelResources(tasks, options);
+        return levelResources(tasks, merged);
       });
     },
 

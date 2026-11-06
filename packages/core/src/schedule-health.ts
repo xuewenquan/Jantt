@@ -7,6 +7,7 @@
 
 import { Task, CriticalPathResult, ScheduleHealthResult, ScheduleHealthIssue } from "./types";
 import { getTaskDependencies } from "./cpm";
+import { getTaskDependencyRelations, getRelationLag } from "./dependencies";
 import { isTaskDone } from "./utils";
 
 /**
@@ -17,6 +18,7 @@ import { isTaskDone } from "./utils";
  * @returns Diagnostic score (0-100), letter grade (A-F), and actionable recommendations.
  */
 export function auditScheduleIntegrity(tasks: Task[], criticalResult: CriticalPathResult): ScheduleHealthResult {
+  if (criticalResult.errors?.length) throw new Error(`Cannot audit schedule: ${criticalResult.errors.join("; ")}`);
   const issues: ScheduleHealthIssue[] = [];
 
   const liveTasks = (tasks || []).filter((t) => !t._deleted);
@@ -103,17 +105,26 @@ export function auditScheduleIntegrity(tasks: Task[], criticalResult: CriticalPa
     }
 
     // 4. Out-of-Sequence Work
-    if ((isDone || progress > 0) && preds.length > 0) {
-      for (const pId of preds) {
-        const prereq = byId.get(pId);
-        if (prereq && !isTaskDone(prereq) && (prereq.progress ?? 0) === 0) {
+    if ((isDone || progress > 0 || t.status === "in-progress") && preds.length > 0) {
+      for (const relation of getTaskDependencyRelations(t)) {
+        const prereq = byId.get(relation.id);
+        if (!prereq) continue;
+        const lag = getRelationLag(relation, t, 0);
+        if (lag < 0) continue; // A lead can legitimately permit earlier work.
+        const predecessorStarted = isTaskDone(prereq) || (prereq.progress ?? 0) > 0 || prereq.status === "in-progress";
+        const predecessorFinished = isTaskDone(prereq);
+        const violatesStatus = relation.type === "FS" ? !predecessorFinished
+          : relation.type === "SS" ? !predecessorStarted
+          : relation.type === "FF" ? isDone && !predecessorFinished
+          : isDone && !predecessorStarted;
+        if (violatesStatus) {
           outOfSequenceCount++;
           issues.push({
             type: "out-of-sequence",
             severity: "medium",
             taskId: t.id,
             taskName: t.label || t.name || t.id,
-            message: `Task "${t.label || t.name || t.id}" is active or finished while predecessor "${prereq.label || prereq.name || prereq.id}" has not started.`,
+            message: `Task "${t.label || t.name || t.id}" has progress inconsistent with its ${relation.type} relationship to "${prereq.label || prereq.name || prereq.id}".`,
             recommendation: "Review dependency relationships to ensure actual execution matches schedule logic."
           });
           break;

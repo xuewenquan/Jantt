@@ -1,7 +1,7 @@
 import { IGestureStrategy, DragState, GestureContext } from "../contracts";
 import { diffDays } from "../../date-math";
 import { syncTaskProgressAndStatus } from "../../utils";
-import { resolveSchedule } from "../../resolver";
+import { resolveSchedule, getScheduleContext } from "../../resolver";
 
 export class ProgressGestureStrategy implements IGestureStrategy {
   public readonly mode = "progress" as const;
@@ -27,7 +27,7 @@ export class ProgressGestureStrategy implements IGestureStrategy {
     Object.assign(task, synced);
 
     if (ctx.autoCascade) {
-      ctx.data.tasks = resolveSchedule(ctx.data.tasks, ctx.defaultGapDays);
+      ctx.data.tasks = resolveSchedule(ctx.data.tasks, ctx.defaultGapDays, getScheduleContext(ctx.data));
     }
     ctx.onRenderRequest();
     ctx.commitData();
