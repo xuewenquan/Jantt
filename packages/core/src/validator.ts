@@ -1,7 +1,7 @@
 import { JanttData, Task, ValidationError, ValidationResult } from "./types";
 import { isValidISODate, diffDays } from "./date-math";
 import { getTaskDependencies } from "./resolver";
-import { CALENDAR_PRESETS, type WorkingCalendar } from "./calendar";
+import { CALENDAR_PRESETS, SUPPORTED_HOLIDAY_REGIONS, type WorkingCalendar } from "./calendar";
 
 /**
  * Validates a Jantt data object and returns an array of LLM-friendly diagnostic errors.
@@ -49,6 +49,10 @@ export function validate(json: unknown): ValidationResult {
   const validateCalendarDefinition = (calendar: unknown, path: string) => {
     if (!calendar || typeof calendar !== "object" || Array.isArray(calendar)) return;
     const definition = calendar as WorkingCalendar;
+    if (definition.region !== undefined && definition.region !== "" &&
+      (typeof definition.region !== "string" || !SUPPORTED_HOLIDAY_REGIONS.some((region) => region === definition.region!.trim().toUpperCase()))) {
+      errors.push({ path: `${path}.region`, code: "SCHEMA_MISMATCH", message: "Unsupported calendar holiday region.", suggestion: `Use ${SUPPORTED_HOLIDAY_REGIONS.join(", ")}, or omit the region and provide holidays explicitly.` });
+    }
     if (definition.workingDays !== undefined) {
       const days = definition.workingDays;
       if (!Array.isArray(days) || days.length === 0 || days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {

@@ -15,6 +15,7 @@ export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sun, 1 = Mon, ..., 6 =
 export type CalendarPreset = "standard" | "continuous" | "compressed_4x10";
 
 export type RegionCode = "US" | "UK" | "GB" | "EU" | "CA" | "AU";
+export const SUPPORTED_HOLIDAY_REGIONS = ["US", "UK", "GB", "EU"] as const;
 
 export interface HolidayDefinition {
   date: string; // YYYY-MM-DD
@@ -37,10 +38,14 @@ export interface WorkingCalendar {
 /** Stable signature of the rules that determine working-day arithmetic. */
 export function calendarRulesSignature(calendar?: WorkingCalendar): string {
   if (!calendar) return "continuous";
+  const exceptions = new Map<string, boolean>();
+  for (const exception of calendar.exceptions ?? []) {
+    if (!exceptions.has(exception.date)) exceptions.set(exception.date, exception.isWorkingDay);
+  }
   return JSON.stringify({
     workingDays: [...new Set(calendar.workingDays ?? [1, 2, 3, 4, 5])].sort(),
     holidays: (calendar.holidays ?? []).map((holiday) => typeof holiday === "string" ? holiday : holiday.date).sort(),
-    exceptions: (calendar.exceptions ?? []).map(({ date, isWorkingDay }) => [date, isWorkingDay]),
+    exceptions: [...exceptions].sort(([a], [b]) => a.localeCompare(b)),
     region: calendar.region?.trim().toUpperCase() || ""
   });
 }

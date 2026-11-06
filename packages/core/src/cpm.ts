@@ -168,7 +168,13 @@ function calculateCriticalPathInternal(tasks: Task[], options?: CriticalPathOpti
   const latestFeasibleStart = (id: string, reference: string, feasible: (date: string) => boolean): string => {
     const test = (offset: number) => {
       const candidate = addDays(reference, offset);
-      return isValidISODate(candidate) && feasible(previousTaskDay(id, candidate));
+      if (!isValidISODate(candidate)) return false;
+      try {
+        return feasible(previousTaskDay(id, candidate));
+      } catch (error) {
+        if (error instanceof CalendarError) return false;
+        throw error;
+      }
     };
     let low = 0;
     let high = 0;
@@ -177,8 +183,15 @@ function calculateCriticalPathInternal(tasks: Task[], options?: CriticalPathOpti
       while (step < 131072 && test(step)) { low = step; step *= 2; }
       high = step;
     } else {
-      while (step < 131072 && !test(-step)) { high = -step; step *= 2; }
-      low = -step;
+      // Only date-specific failures below the supported range are infeasible;
+      // do not eagerly probe the calendar near year 1000.
+      const minOffset = Math.max(diffDays(reference, "1000-01-01"), -131072);
+      low = Math.max(-step, minOffset);
+      while (step < 131072 && !test(low) && low > minOffset) {
+        high = low;
+        step *= 2;
+        low = Math.max(-step, minOffset);
+      }
     }
     if (!test(low) || test(high)) throw new CalendarError(`Cannot determine a feasible date for task '${id}'`);
     while (high - low > 1) {

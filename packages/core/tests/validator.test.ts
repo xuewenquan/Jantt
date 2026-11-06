@@ -44,6 +44,22 @@ describe("Jantt Schema Validator", () => {
     expect(validate({ meta: { calendar }, people: [{ id: "p", name: "Person", calendar }], tasks: [{ ...task, calendar }] }).valid).toBe(true);
   });
 
+  it("validates holiday regions in named and inline calendars", () => {
+    const result = validate({
+      calendars: { custom: { region: "CA" } },
+      meta: { calendar: { region: "UNKNOWN" } },
+      people: [{ id: "p", name: "Person", calendar: { region: 42 } }],
+      tasks: [{ id: "a", start: "2026-09-01", end: "2026-09-03", calendar: { region: "AU" } }]
+    });
+    expect(result.errors.map((error) => error.path)).toEqual(expect.arrayContaining([
+      "calendars.custom.region", "meta.calendar.region", "people[0].calendar.region", "tasks[0].calendar.region"
+    ]));
+    for (const region of ["US", " uk ", "GB", "EU", ""]) {
+      const valid = validate({ meta: { calendar: { region } }, tasks: [{ id: "a", start: "2026-09-01", end: "2026-09-03" }] });
+      expect(valid.errors.some((error) => error.path === "meta.calendar.region")).toBe(false);
+    }
+  });
+
   it("validates the project target date", () => {
     const tasks = [{ id: "a", category: "dev", start: "2026-09-01", end: "2026-09-03" }];
     expect(validate({ meta: { targetDate: "not-a-date" }, tasks }).errors.some((error) => error.path === "meta.targetDate")).toBe(true);

@@ -18,7 +18,10 @@ each pair shares a resource and starts on the same day; all other tasks have
 separate resources. `calendar` uses the same fixture with a Monday–Friday
 calendar and a holiday immediately after the initial task date. In `crowded`
 mode all tasks share one resource; the pair count must be zero. Tasks have
-one-day duration and no dependencies or locked tasks. The benchmark checks
+one-day duration. In `dependent` mode each conflict pair has one locked task
+and one movable task; a separate task depends on the movable task with SS+1d.
+The task count must be at least three times the pair count. Other modes have no
+dependencies or locked tasks. The benchmark checks
 that all expected conflicts are resolved and reports the median, minimum and
 maximum of three runs after a small warmup. Times cover the leveling call only.
 
@@ -37,7 +40,7 @@ the larger scenarios were measured in a separate invocation):
 | 100 | — | crowded | 156.9 | 156.3–160.0 |
 
 These synthetic cases isolate a few dimensions; they do not measure browser
-worker startup, rendering, dependencies, locked tasks, long durations or all
+worker startup, rendering, long durations or all dependency and
 calendar combinations. Do not use these numbers as a universal latency
 guarantee. A CPU sample of the 1,000-task calendar case and the crowded case
 showed date validation and parsing among the largest self-time contributors;
@@ -82,3 +85,21 @@ medians on the same machine, with three runs before and after the change:
 
 The runs were sequential, not paired; these results describe the synthetic
 scenarios above and are not a guarantee for projects with dependencies or locks.
+
+With the CPM reuse optimization, the `dependent` scenarios produced these
+medians on the same machine (three runs per scenario):
+
+| Tasks | Conflicting pairs | Median | Min–max |
+| ---: | ---: | ---: | ---: |
+| 100 | 5 | 5.5 ms | 5.5–6.6 ms |
+| 500 | 5 | 21.8 ms | 21.3–23.2 ms |
+| 1,000 | 50 | 356.9 ms | 356.1–377.8 ms |
+
+Each run checks that locked tasks remain fixed, moved tasks are rescheduled,
+their successors follow the dependency, and all overloads are resolved.
+For these three fixtures, the complete leveling results were also compared
+against the implementation before CPM reuse and were identical.
+In a separate Node CPU sample of the 1,000-task dependent scenario, roughly
+69% of samples inside `levelResources` included CPM calculation, 17% included
+over-allocation detection, and 10% included schedule resolution. These are
+inclusive call-stack samples, not exact timings; nested calls may overlap.

@@ -9,6 +9,7 @@ import {
   getWorkingDaysInRange,
   getStatutoryHolidays,
   resolveTaskCalendar,
+  calendarRulesSignature,
   CALENDAR_PRESETS
 } from "../src/calendar";
 import { CascadeResolveStage } from "../src/pipeline/stages/cascade-resolve-stage";
@@ -19,6 +20,30 @@ import { getTaskDependencyRelations } from "../src/dependencies";
 import type { Task, Person, WorkingCalendar } from "../src/types";
 
 describe("Multi-Calendar & Statutory Holiday Matrix", () => {
+  it("normalizes exception order while preserving the first rule for each date", () => {
+    const first = { date: "2026-11-07", isWorkingDay: true };
+    const second = { date: "2026-11-09", isWorkingDay: false };
+    const conflicting = { date: first.date, isWorkingDay: false };
+    const a = { exceptions: [first, second, conflicting] };
+    const b = { exceptions: [second, first, conflicting] };
+    const c = { exceptions: [conflicting, second, first] };
+    expect(calendarRulesSignature(a)).toBe(calendarRulesSignature(b));
+    expect(calendarRulesSignature(a)).not.toBe(calendarRulesSignature(c));
+    expect(isWorkingDay(first.date, a)).toBe(true);
+    expect(isWorkingDay(first.date, c)).toBe(false);
+  });
+
+  it("keeps CPM results when equivalent calendars list exceptions in different orders", () => {
+    const exceptions = [{ date: "2026-11-07", isWorkingDay: true }, { date: "2026-11-09", isWorkingDay: false }];
+    const tasks: Task[] = [
+      { id: "a", start: "2026-11-05", end: "2026-11-06", calendar: { exceptions } },
+      { id: "b", start: "2026-11-05", end: "2026-11-06", calendar: { exceptions }, dependsOn: "a:FF+1d" }
+    ];
+    const baseline = calculateCriticalPath(tasks);
+    const reordered = calculateCriticalPath([tasks[0], { ...tasks[1], calendar: { exceptions: [...exceptions].reverse() } }]);
+    expect(baseline.errors || []).toEqual([]);
+    expect(reordered).toEqual(baseline);
+  });
   describe("calendar-aware critical path", () => {
     it("satisfies every relationship in mixed-calendar dependency networks", () => {
       let seed = 0x12345678;
@@ -203,6 +228,42 @@ describe("Multi-Calendar & Statutory Holiday Matrix", () => {
       const result = calculateCriticalPath([{ id: "a", start: "9999-12-31", end: "9999-12-31", calendar: "standard" }]);
       expect(result.errors || []).toEqual([]);
       expect(result.metrics.get("a")?.earlyStart).toBe("9999-12-31");
+    });
+
+    it("finds feasible late dates near the minimum supported date", () => {
+      const result = calculateCriticalPath([
+        { id: "a", start: "1000-01-01", end: "1000-01-01", calendar: "continuous" },
+        { id: "b", start: "1000-01-14", end: "1000-01-14", calendar: "standard", dependsOn: "a:FS+0d" }
+      ], { targetDate: "1000-01-04" });
+      expect(result.errors || []).toEqual([]);
+      expect(result.metrics.get("b")?.lateStart).toBe("1000-01-03");
+    });
+
+    it("respects the first working day when searching near the minimum date", () => {
+      const tasks: Task[] = [{ id: "a", start: "1000-01-19", end: "1000-01-19", calendar: { workingDays: [0] } }];
+      const feasible = calculateCriticalPath(tasks, { targetDate: "1000-01-06" });
+      expect(feasible.errors || []).toEqual([]);
+      expect(feasible.metrics.get("a")?.lateStart).toBe("1000-01-05");
+      const impossible = calculateCriticalPath(tasks, { targetDate: "1000-01-04" });
+      expect(impossible.errors?.[0]).toMatch(/Cannot determine a feasible date/);
+    });
+
+    it("does not inspect the minimum year for a modern backward search", () => {
+      const holidays = Array.from({ length: 10001 }, (_, day) => addDays("1000-01-01", day));
+      const result = calculateCriticalPath([
+        { id: "a", start: "2026-11-16", end: "2026-11-16", calendar: { holidays } }
+      ], { targetDate: "2026-11-08" });
+      expect(result.errors || []).toEqual([]);
+      expect(result.metrics.get("a")?.lateStart).toBe("2026-11-06");
+    });
+
+    it("does not inspect distant non-working dates for an early-year search", () => {
+      const holidays = Array.from({ length: 10001 }, (_, day) => addDays("1000-01-01", day));
+      const result = calculateCriticalPath([
+        { id: "a", start: "1030-01-10", end: "1030-01-10", calendar: { workingDays: [0, 1, 2, 3, 4, 5, 6], holidays, exceptions: [{ date: "1030-01-09", isWorkingDay: false }] } }
+      ], { targetDate: "1030-01-09" });
+      expect(result.errors || []).toEqual([]);
+      expect(result.metrics.get("a")?.lateStart).toBe("1030-01-08");
     });
 
     it("reports a calendar with no working days instead of returning a non-working date", () => {
