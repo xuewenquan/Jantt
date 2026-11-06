@@ -29,21 +29,17 @@ export function isValidISODate(dateStr: string): boolean {
   if (!ISO_DATE_REGEX.test(clean)) {
     return false;
   }
-  const [yearStr, monthStr, dayStr] = clean.split("-");
-  const year = parseInt(yearStr, 10);
-  const month = parseInt(monthStr, 10);
-  const day = parseInt(dayStr, 10);
+  const year = Number(clean.slice(0, 4));
+  const month = Number(clean.slice(5, 7));
+  const day = Number(clean.slice(8, 10));
 
   if (month < 1 || month > 12 || day < 1 || day > 31 || year < 1000 || year > 9999) {
     return false;
   }
 
-  const d = new Date(Date.UTC(year, month - 1, day));
-  return (
-    d.getUTCFullYear() === year &&
-    d.getUTCMonth() === month - 1 &&
-    d.getUTCDate() === day
-  );
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = month === 2 ? (leap ? 29 : 28) : ([4, 6, 9, 11].includes(month) ? 30 : 31);
+  return day <= daysInMonth;
 }
 
 /**
