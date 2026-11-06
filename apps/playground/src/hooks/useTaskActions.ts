@@ -4,6 +4,7 @@ import {
   type Task,
   type Team,
   type ValidationResult,
+  CalendarError,
   getTodayISODate,
   addDays,
   resolveSchedule,
@@ -32,6 +33,7 @@ interface UseTaskActionsOptions {
   teams: Team[];
   initialKanbanSort: KanbanSortRule[];
   handleChartCommit?: (data: JanttData) => void;
+  showToast: (message: string, isError?: boolean) => void;
 }
 
 export function useTaskActions({
@@ -45,12 +47,17 @@ export function useTaskActions({
   effectivePeople,
   teams,
   initialKanbanSort,
-  handleChartCommit
+  handleChartCommit,
+  showToast
 }: UseTaskActionsOptions) {
   const [tasksViewMode, setTasksViewMode] = useState<"cards" | "todo">("cards");
   const [tasksSearchQuery, setTasksSearchQuery] = useState<string>("");
   const [summarySortConfig, setSummarySortConfig] = useState<SummarySortConfig>({ column: "", direction: null });
   const [kanbanSortRules, setKanbanSortRules] = useState<KanbanSortRule[]>(initialKanbanSort);
+  const handleScheduleError = useCallback((error: unknown) => {
+    if (!(error instanceof CalendarError)) throw error;
+    showToast(`Schedule unavailable: ${error.message}`, true);
+  }, [showToast]);
 
   useEffect(() => {
     try {
@@ -192,7 +199,13 @@ export function useTaskActions({
     };
 
     const nextTasks = [...activeTasks, newTask];
-    const resolved = resolveSchedule(nextTasks, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
+    let resolved: Task[];
+    try {
+      resolved = resolveSchedule(nextTasks, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
+    } catch (error) {
+      handleScheduleError(error);
+      return;
+    }
     const updated = {
       ...parsedData,
       meta: {
@@ -208,7 +221,7 @@ export function useTaskActions({
       setJsonText(JSON.stringify(updated, null, 2));
       setValidationResult(validate(updated));
     }
-  }, [parsedData, setParsedData, setJsonText, setValidationResult, handleChartCommit]);
+  }, [parsedData, setParsedData, setJsonText, setValidationResult, handleChartCommit, handleScheduleError]);
 
   return {
     tasksViewMode,
@@ -222,6 +235,7 @@ export function useTaskActions({
     sortedSummaryTasks,
     handleSummarySort,
     kanbanMultiSort,
+    handleScheduleError,
     handleAddNewTask
   };
 }

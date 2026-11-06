@@ -70,3 +70,15 @@ after that change gave these medians (three measurements per scenario):
 The change was not retained: these scenarios showed no clear benefit, and the
 separate runs do not establish a meaningful calendar regression either. Other
 workloads, including large people lists, have not been evaluated.
+
+Reusing the CPM result of each accepted leveling trial produced the following
+medians on the same machine, with three runs before and after the change:
+
+| Tasks | Conflicting pairs | Mode | Before median | After median |
+| ---: | ---: | --- | ---: | ---: |
+| 1,000 | 50 | plain | 488.8 ms | 300.4 ms |
+| 1,000 | 50 | calendar | 1,588.0 ms | 891.1 ms |
+| 100 | — | crowded | 129.6 ms | 85.0 ms |
+
+The runs were sequential, not paired; these results describe the synthetic
+scenarios above and are not a guarantee for projects with dependencies or locks.

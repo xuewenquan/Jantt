@@ -682,7 +682,8 @@ export function App() {
     isTaskMatchingDateFilter: dateFilter.isTaskMatchingDateFilter,
     effectivePeople: people.effectivePeople,
     teams: people.teams,
-    initialKanbanSort: init.initialKanbanSort
+    initialKanbanSort: init.initialKanbanSort,
+    showToast: toast.showToast
   });
 
   // Interactive Slide-Out Task Detail Drawer

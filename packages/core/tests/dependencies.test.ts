@@ -69,6 +69,41 @@ describe("Enterprise 4-Type Dependency & Lead/Lag Engine", () => {
     second.element.remove();
   });
 
+  it("keeps the sidebar usable when a dependency has an unknown calendar", () => {
+    const a: Task = { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03", calendarId: "missing" };
+    const b: Task = { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "a" };
+    const sidebar = createTaskSidebar({ task: b, allTasks: [a, b], categories: {}, onSave: () => {}, onClose: () => {} });
+    const box = sidebar.element.querySelector<HTMLElement>("#jantt-sidebar-dep-conflict-box")!;
+    expect(box.textContent).toContain("Unknown calendar 'missing'");
+    const start = sidebar.element.querySelector<HTMLInputElement>("#jantt-sidebar-start")!;
+    start.value = "2026-11-03";
+    start.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(box.textContent).toContain("Unknown calendar 'missing'");
+    sidebar.element.querySelector<HTMLButtonElement>("[data-remove-dep='0']")!.click();
+    expect(box.style.display).toBe("none");
+    sidebar.element.remove();
+  });
+
+  it("reports calendar errors during save and delete without closing the sidebar", () => {
+    const task: Task = { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-03" };
+    const invalid: Task = { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03", calendarId: "missing" };
+    const onClose = vi.fn();
+    const sidebar = createTaskSidebar({ task, allTasks: [task, invalid], categories: {}, onClose,
+      onSave: () => { resolveSchedule([task, invalid]); },
+      onDelete: () => { resolveSchedule([invalid]); }
+    });
+    const box = sidebar.element.querySelector<HTMLElement>("#jantt-sidebar-dep-conflict-box")!;
+    sidebar.element.querySelector<HTMLButtonElement>("#jantt-sidebar-save")!.click();
+    expect(box.textContent).toContain("Unknown calendar 'missing'");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    sidebar.element.querySelector<HTMLButtonElement>("#jantt-sidebar-delete")!.click();
+    expect(box.textContent).toContain("Unknown calendar 'missing'");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(sidebar.element.classList.contains("is-closing")).toBe(false);
+    confirmSpy.mockRestore();
+    sidebar.element.remove();
+  });
+
   it("edits relationship type and an explicit zero lag in the sidebar", () => {
     const a: Task = { id: "a", category: "dev", start: "2026-11-02", end: "2026-11-05" };
     const b: Task = { id: "b", category: "dev", start: "2026-11-02", end: "2026-11-03", dependsOn: "a" };

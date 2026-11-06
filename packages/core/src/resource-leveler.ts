@@ -388,10 +388,10 @@ export function levelResources(
   const adjustments: LevelingAdjustment[] = [];
 
   let pass = 0;
+  // Keep CPM paired with workingTasks; every accepted trial supplies both.
   let cpm = baselineCpm;
   while (pass < maxIterations) {
     pass++;
-    if (pass > 1) cpm = calculateCriticalPath(workingTasks, cpmOptions);
     if (cpm.errors?.length) {
       unresolvedReasons.push(...cpm.errors);
       break;
@@ -481,6 +481,7 @@ export function levelResources(
             withinFloat: (calendar ? diffWorkingDays(candidate.start, newStart, calendar) : diffDays(candidate.start, newStart)) <= (cpm.metrics.get(candidate.id)?.totalFloat ?? 0)
           });
           workingTasks = trial;
+          cpm = trialCpm;
           found = true;
           break;
         }
@@ -534,6 +535,7 @@ export function levelResources(
         withinFloat: floatShift <= (cpm.metrics.get(candidate.id)?.totalFloat ?? 0)
       });
       workingTasks = trial;
+      cpm = trialCpm;
       previousMoves.set(currentKey, candidate.id);
       rejectedConflicts.clear();
       moved = true;
@@ -560,6 +562,7 @@ export function levelResources(
         const firstCpm = calculateCriticalPath(firstTrial, cpmOptions);
         if (firstCpm.errors?.length || firstTrial.some((task) => hasLockedViolation(task, firstCpm, options))) continue;
         let trial = firstTrial;
+        let trialCpm = firstCpm;
         let valid = true;
         for (const blocker of group) {
           excluded.delete(blocker.id);
@@ -568,7 +571,7 @@ export function levelResources(
           const slot = findResourceSlot(shiftedBlocker, trial.filter((task) => !excluded.has(task.id)), shiftedCandidate, defaultGap, options);
           if (!slot || slot.start <= shiftedBlocker.start) { valid = false; break; }
           trial = resolveSchedule(trial.map((task) => task.id === blocker.id ? { ...task, ...slot } : task), defaultGap, scheduleOptions);
-          const trialCpm = calculateCriticalPath(trial, cpmOptions);
+          trialCpm = calculateCriticalPath(trial, cpmOptions);
           if (trialCpm.errors?.length || trial.some((task) => hasLockedViolation(task, trialCpm, options))) { valid = false; break; }
         }
         if (!valid) continue;
@@ -586,6 +589,7 @@ export function levelResources(
             reason: `Reordered resource tasks to preserve locked dependencies on ${earliestConflict.date}` });
         }
         workingTasks = trial;
+        cpm = trialCpm;
         rejectedConflicts.clear();
         moved = true;
         break;

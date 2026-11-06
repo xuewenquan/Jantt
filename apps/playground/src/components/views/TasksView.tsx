@@ -42,6 +42,7 @@ interface TasksViewProps {
   teams: Team[];
   effectivePeople: EffectivePerson[];
   handleAddNewTask: () => void;
+  onScheduleError: (error: unknown) => void;
   setDateFilterMode: (mode: DateFilterMode) => void;
   openTaskDetailSidebar: (task: Task) => void;
   handleChartCommit: (data: JanttData) => void;
@@ -64,6 +65,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   teams,
   effectivePeople,
   handleAddNewTask,
+  onScheduleError,
   setDateFilterMode,
   openTaskDetailSidebar,
   handleChartCommit,
@@ -87,7 +89,13 @@ export const TasksView: React.FC<TasksViewProps> = ({
         ...(parsedData.meta?.tombstones || {}),
         [taskIdToDelete]: { deletedAt: nowIso, entityType: "task" }
       };
-      const resolved = resolveSchedule(pruned, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
+      let resolved: Task[];
+      try {
+        resolved = resolveSchedule(pruned, parsedData.meta?.defaultGapDays ?? 2, getScheduleContext(parsedData));
+      } catch (error) {
+        onScheduleError(error);
+        return;
+      }
       handleChartCommit({
         ...parsedData,
         meta: {
@@ -97,7 +105,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         tasks: resolved
       });
     },
-    [parsedData, handleChartCommit]
+    [parsedData, handleChartCommit, isViewer, onPromptFork, onScheduleError]
   );
 
   return (

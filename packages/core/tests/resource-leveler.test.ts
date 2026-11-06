@@ -217,6 +217,20 @@ describe("Autonomous Resource Leveling Heuristic Engine", () => {
       const result = levelResources(tasks, { defaultGapDays: 1, targetDate: "2026-11-10" });
       expect(result.adjustments[0].withinFloat).toBe(true);
     });
+    it("updates float after an accepted move before resolving another resource", () => {
+      const tasks: Task[] = [
+        { id: "a", assignee: "alice", start: "2026-11-02", end: "2026-11-02", locked: true },
+        { id: "b", assignee: "alice", start: "2026-11-02", end: "2026-11-02" },
+        { id: "c", assignee: "bob", start: "2026-11-02", end: "2026-11-02", locked: true },
+        { id: "d", assignee: "bob", start: "2026-11-02", end: "2026-11-02" }
+      ];
+      const result = levelResources(tasks, { defaultGapDays: 0 });
+      expect(result.adjustments.map(({ taskId, withinFloat }) => ({ taskId, withinFloat }))).toEqual([
+        { taskId: "b", withinFloat: false },
+        { taskId: "d", withinFloat: true }
+      ]);
+      expect(result.remainingOverallocations).toEqual([]);
+    });
     it("leaves an overload unresolved when no later supported date exists", () => {
       const tasks: Task[] = [
         { id: "a", assignee: "alice", start: "9999-12-31", end: "9999-12-31", locked: true },

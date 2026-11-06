@@ -195,6 +195,7 @@ export const ViewRouter: React.FC<ViewRouterProps> = ({
           teams={people.teams}
           effectivePeople={people.effectivePeople}
           handleAddNewTask={tasks.handleAddNewTask}
+          onScheduleError={tasks.handleScheduleError}
           setDateFilterMode={dateFilter.setDateFilterMode}
           openTaskDetailSidebar={taskDetail.openTaskDetailSidebar}
           handleChartCommit={editor.handleChartCommit}

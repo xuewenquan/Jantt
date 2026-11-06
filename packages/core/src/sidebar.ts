@@ -5,6 +5,7 @@ import { formatDependency, getTaskDependencyRelations, type DependencyRelation, 
 import type { PipelineContext } from "./pipeline/contracts";
 import { DEFAULT_GAP_DAYS } from "./constants";
 import { escapeHtml, syncTaskProgressAndStatus } from "./utils";
+import { CalendarError } from "./calendar";
 
 export interface TaskSidebarOptions {
   task: Task;
@@ -73,6 +74,16 @@ export function createTaskSidebar(options: TaskSidebarOptions): TaskSidebarInsta
   sidebarEl.className = `jantt-sidebar-drawer ${themeClassName || ""}`;
   backdrop.appendChild(sidebarEl);
 
+  const showCalendarError = (error: unknown) => {
+    if (!(error instanceof CalendarError)) throw error;
+    const box = sidebarEl.querySelector<HTMLElement>("#jantt-sidebar-dep-conflict-box");
+    if (box) {
+      box.style.display = "block";
+      box.setAttribute("role", "alert");
+      box.textContent = `Schedule unavailable: ${error.message}`;
+    }
+  };
+
   // Apply custom theme CSS variables if provided
   if (theme) {
     Object.entries(theme).forEach(([k, v]) => {
@@ -126,13 +137,23 @@ export function createTaskSidebar(options: TaskSidebarOptions): TaskSidebarInsta
       defaultGapDays,
       scheduleContext,
       (updated) => {
+        try {
+          onSave(updated);
+        } catch (error) {
+          showCalendarError(error);
+          return;
+        }
         currentTask = updated;
-        onSave(updated);
         close();
       },
       () => {
         if (onDelete) {
-          onDelete(currentTask.id);
+          try {
+            onDelete(currentTask.id);
+          } catch (error) {
+            showCalendarError(error);
+            return;
+          }
           close();
         }
       },
@@ -460,7 +481,17 @@ function renderDefaultSidebarContent(
       // Only the candidate's transitive predecessors can affect its earliest
       // start, so resolve that subgraph instead of the whole project.
       const source = resolveDependencySubgraph(allTasks, [candidate]);
-      const adjusted = currentDeps.length && curStart ? resolveSchedule(source, defaultGapDays, scheduleContext).find((item) => item.id === task.id) : undefined;
+      let adjusted: Task | undefined;
+      try {
+        adjusted = currentDeps.length && curStart ? resolveSchedule(source, defaultGapDays, scheduleContext).find((item) => item.id === task.id) : undefined;
+      } catch (error) {
+        if (!(error instanceof CalendarError)) throw error;
+        conflictBox.style.display = "block";
+        conflictBox.setAttribute("role", "alert");
+        conflictBox.textContent = `Schedule unavailable: ${error.message}`;
+        return;
+      }
+      conflictBox.removeAttribute("role");
       if (adjusted && adjusted.start > curStart) {
         conflictBox.style.display = "block";
         const latestEnd = adjusted.start;
