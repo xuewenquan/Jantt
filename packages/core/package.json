@@ -15,6 +15,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./resource-leveler": {
+      "types": "./dist/resource-leveler.d.ts",
+      "import": "./dist/resource-leveler.js",
+      "require": "./dist/resource-leveler.cjs"
+    },
     "./theme.css": "./dist/theme.css",
     "./style.css": "./dist/style.css"
   },

@@ -475,9 +475,12 @@ describe("Autonomous Resource Leveling Heuristic Engine", () => {
         { id: "a", start: "2026-11-02", end: "2026-11-04" },
         { id: "b", start: "2026-11-02", end: "2026-11-03", dependsOn: "a", locked: true }
       ];
-      expect(levelResources(tasks).unresolvedReasons?.[0]).toMatch(/locked.*violates/i);
+      const lockedResult = levelResources(tasks);
+      expect(lockedResult.failed).toBe(true);
+      expect(lockedResult.unresolvedReasons?.[0]).toMatch(/locked.*violates/i);
       const cyclic = [{ ...tasks[0], dependsOn: "b" }, tasks[1]];
       const result = levelResources(cyclic);
+      expect(result.failed).toBe(true);
       expect(result.unresolvedReasons?.[0]).toMatch(/circular/i);
       expect(result.tasks).toEqual(cyclic);
     });
@@ -491,6 +494,7 @@ describe("Autonomous Resource Leveling Heuristic Engine", () => {
       expect(result.adjustments.some((adjustment) => adjustment.resourceId === "bob")).toBe(true);
       expect(result.remainingOverallocations.every((allocation) => allocation.resourceId === "alice")).toBe(true);
       expect(result.unresolvedReasons?.some((reason) => reason.includes("alice"))).toBe(true);
+      expect(result.conflictDiagnostics?.[0]).toMatchObject({ resourceId: "alice", overCapacityTaskIds: ["a"], status: "unresolved" });
     });
     it("moves an individually assigned task to a period when the resource is available", () => {
       const tasks: Task[] = [{ id: "a", assignee: "alice", calendar: "continuous", start: "2026-11-06", end: "2026-11-07" }];
@@ -514,6 +518,34 @@ describe("Autonomous Resource Leveling Heuristic Engine", () => {
       const result = levelResources(tasks);
       expect(result.remainingOverallocations.length).toBeGreaterThan(0);
       expect(result.unresolvedReasons?.[0]).toMatch(/exceeds capacity/);
+    });
+
+    it("reports locked tasks and iteration limits as structured facts", () => {
+      const tasks: Task[] = [
+        { id: "a", assignee: "alice", locked: true, start: "2026-11-02", end: "2026-11-02" },
+        { id: "b", assignee: "alice", start: "2026-11-02", end: "2026-11-02" }
+      ];
+      const result = levelResources(tasks, { maxIterations: 0 });
+      expect(result.conflictDiagnostics).toEqual([{ resourceId: "alice", date: "2026-11-02", lockedTaskIds: ["a"], overCapacityTaskIds: [], status: "iteration_limit" }]);
+    });
+
+    it("marks overload diagnostics as invalid when a locked dependency is violated", () => {
+      const tasks: Task[] = [
+        { id: "a", start: "2026-11-02", end: "2026-11-04" },
+        { id: "b", assignee: "alice", locked: true, dependsOn: "a", start: "2026-11-02", end: "2026-11-03" },
+        { id: "c", assignee: "alice", start: "2026-11-02", end: "2026-11-03" }
+      ];
+      const result = levelResources(tasks);
+      expect(result.failed).toBe(true);
+      expect(result.conflictDiagnostics?.[0]).toMatchObject({ status: "schedule_invalid", lockedTaskIds: ["b"] });
+      expect(result.remainingOverallocations).toEqual(detectOverAllocations(result.tasks));
+    });
+
+    it("does not label a task as exceeding nominal capacity on a resource holiday", () => {
+      const tasks: Task[] = [{ id: "a", assignee: "alice", locked: true, calendar: "continuous", start: "2026-11-02", end: "2026-11-02" }];
+      const result = levelResources(tasks, { people: [{ id: "alice", name: "Alice", calendar: { workingDays: [1, 2, 3, 4, 5], holidays: ["2026-11-02"] } }] });
+      expect(result.remainingOverallocations[0].capacity).toBe(0);
+      expect(result.conflictDiagnostics?.[0]).toMatchObject({ lockedTaskIds: ["a"], overCapacityTaskIds: [] });
     });
 
     it("keeps the working calendar while moving a task and cascading its successor", () => {

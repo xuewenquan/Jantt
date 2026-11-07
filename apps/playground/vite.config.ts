@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@jantt/core/resource-leveler": resolve(__dirname, "../../packages/core/src/resource-leveler.ts"),
       "@jantt/core": resolve(__dirname, "../../packages/core/src/index.ts"),
       "@jantt/react": resolve(__dirname, "../../packages/react/src/index.ts")
     }

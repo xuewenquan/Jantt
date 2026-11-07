@@ -17,6 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
+      "@jantt/core/resource-leveler": ["../../packages/core/src/resource-leveler"],
       "@jantt/core": ["../../packages/core/src"],
       "@jantt/react": ["../../packages/react/src"]
     }

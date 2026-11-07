@@ -38,6 +38,9 @@ describe("resource leveling preview", () => {
     click("Preview leveling");
     expect(commit).not.toHaveBeenCalled();
     expect(container.textContent).toContain("0 resource-day overloads remain");
+    expect(container.textContent).toContain("No overloads remain");
+    expect(container.textContent).toContain("Resource: alice.");
+    expect(container.textContent).toMatch(/(?:Within|Outside) float at the time of adjustment/);
     click("Apply preview");
     expect(commit).toHaveBeenCalledOnce();
     expect(commit.mock.calls[0][0].tasks.find((task: any) => task.id === "b").start).toBe("2026-11-05");
@@ -91,6 +94,79 @@ describe("resource leveling preview", () => {
     act(() => root.render(<ResourceLevelingPanel data={withSuccessor} onCommit={vi.fn()} readOnly={false} />));
     click("Preview leveling");
     expect(container.textContent).toContain("c: 2026-11-05–2026-11-06 → 2026-11-08–2026-11-09");
+    expect(container.textContent).toContain("Schedule change (dependency cascade or initial scheduling)");
+  });
+
+  it("shows completion dates and target impact", () => {
+    const targeted: JanttData = { ...data, meta: { targetDate: "2026-11-04" } };
+    act(() => root.render(<ResourceLevelingPanel data={targeted} onCommit={vi.fn()} readOnly={false} />));
+    click("Preview leveling");
+    expect(container.textContent).toContain("Project finish: 2026-11-03 → 2026-11-06");
+    expect(container.textContent).toContain("Preview exceeds the target date");
+  });
+
+  it("does not report success or apply an invalid baseline", () => {
+    const invalid: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-04" },
+      { id: "b", start: "2026-11-02", end: "2026-11-03", dependsOn: "a", locked: true },
+      { id: "x", start: "2026-11-02", end: "2026-11-03" },
+      { id: "y", start: "2026-11-02", end: "2026-11-03", dependsOn: "x" }
+    ], meta: { targetDate: "2026-12-01" } };
+    const commit = vi.fn();
+    act(() => root.render(<ResourceLevelingPanel data={invalid} onCommit={commit} readOnly={false} />));
+    click("Preview leveling");
+    expect(container.textContent).toContain("Leveling failed");
+    expect(container.textContent).toContain("y: 2026-11-02–2026-11-03 → 2026-11-05–2026-11-06");
+    expect(container.textContent).not.toContain("Preview meets the target date");
+    expect(container.textContent).not.toContain("Project finish extends");
+    expect(container.textContent).not.toContain("Review remaining conflicts before applying");
+    expect(container.textContent).toContain("The dates below are from dependency resolution");
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Apply preview")?.disabled).toBe(true);
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("shows a clear failure when a cycle produces no date changes", () => {
+    const invalid: JanttData = { tasks: [
+      { id: "a", start: "2026-11-02", end: "2026-11-02", dependsOn: "b" },
+      { id: "b", start: "2026-11-02", end: "2026-11-02", dependsOn: "a" }
+    ] };
+    act(() => root.render(<ResourceLevelingPanel data={invalid} onCommit={vi.fn()} readOnly={false} />));
+    click("Preview leveling");
+    expect(container.textContent).toContain("This preview is invalid and cannot be applied.");
+    expect(container.textContent).not.toContain("dates below");
+    expect(container.textContent).not.toContain("Review remaining conflicts before applying");
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Apply preview")?.disabled).toBe(true);
+  });
+
+  it("identifies a task whose own allocation exceeds capacity", () => {
+    const oversized: JanttData = { tasks: [{ id: "a", start: "2026-11-02", end: "2026-11-02", assignee: "alice", allocation: 1.5 }] };
+    act(() => root.render(<ResourceLevelingPanel data={oversized} onCommit={vi.fn()} readOnly={false} />));
+    click("Preview leveling");
+    expect(container.textContent).toContain("Tasks exceeding capacity individually: a");
+  });
+
+  it("invalidates a completed preview when the project changes", () => {
+    const commit = vi.fn();
+    act(() => root.render(<ResourceLevelingPanel data={data} onCommit={commit} readOnly={false} />));
+    click("Preview leveling");
+    act(() => root.render(<ResourceLevelingPanel data={{ ...data, meta: { targetDate: "2026-12-01" } }} onCommit={commit} readOnly={false} />));
+    expect(container.textContent).not.toContain("Apply preview");
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("hides a stale preview before passive effects run", () => {
+    let sawApply = true;
+    function Observe() {
+      React.useLayoutEffect(() => {
+        sawApply = [...container.querySelectorAll("button")].some((button) => button.textContent === "Apply preview");
+      });
+      return null;
+    }
+    const render = (value: JanttData) => root.render(<><ResourceLevelingPanel data={value} onCommit={vi.fn()} readOnly={false} /><Observe /></>);
+    act(() => render(data));
+    click("Preview leveling");
+    act(() => render({ ...data }));
+    expect(sawApply).toBe(false);
   });
 
   it("shows locked conflicts alongside changes that can be applied", () => {
@@ -104,7 +180,9 @@ describe("resource leveling preview", () => {
     act(() => root.render(<ResourceLevelingPanel data={partial} onCommit={commit} readOnly={false} />));
     click("Preview leveling");
     expect(container.textContent).toContain("1 resource-day overload remain");
+    expect(container.textContent).toContain("Overloads remain");
     expect(container.textContent).toContain("alice, 2026-11-02: 200% allocated / 100% available (a, b)");
+    expect(container.textContent).toContain("Locked tasks: a, b");
     expect(container.textContent).toContain("Could not find a resolution for alice overload");
     expect(container.textContent).toContain("d: 2026-11-02–2026-11-02 → 2026-11-04–2026-11-04");
     click("Apply preview");

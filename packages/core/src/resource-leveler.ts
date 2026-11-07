@@ -36,6 +36,14 @@ export interface LevelingAdjustment {
   withinFloat: boolean;
 }
 
+export interface LevelingConflictDiagnostic {
+  resourceId: string;
+  date: string;
+  lockedTaskIds: string[];
+  overCapacityTaskIds: string[];
+  status: "schedule_invalid" | "iteration_limit" | "unresolved";
+}
+
 export interface ResourceLevelingOptions {
   /** Maximum units a resource can be assigned per day before being overallocated (default: 1.0). */
   defaultCapacity?: number;
@@ -63,6 +71,9 @@ export interface LevelingResult {
   projectDurationChanged: boolean;
   daysAdded: number;
   unresolvedReasons?: string[];
+  conflictDiagnostics?: LevelingConflictDiagnostic[];
+  /** CPM returned an error or a locked task violates its dependencies. */
+  failed?: boolean;
 }
 
 function taskCalendar(task: Task, options?: ResourceLevelingOptions): WorkingCalendar | undefined {
@@ -109,6 +120,20 @@ function resourceCapacity(resourceId: string, options?: ResourceLevelingOptions)
 
 function exceedsCapacity(units: number, capacity: number): boolean {
   return units > capacity && units - capacity > Number.EPSILON * Math.max(Math.abs(units), Math.abs(capacity)) * 8;
+}
+
+function describeConflicts(conflicts: ResourceAllocation[], tasks: Task[], status: LevelingConflictDiagnostic["status"], options?: ResourceLevelingOptions): LevelingConflictDiagnostic[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  return conflicts.map((conflict) => ({
+    resourceId: conflict.resourceId,
+    date: conflict.date,
+    lockedTaskIds: conflict.tasks.filter((id) => byId.get(id)?.locked),
+    overCapacityTaskIds: conflict.tasks.filter((id) => {
+      const task = byId.get(id);
+      return task ? exceedsCapacity(getTaskAllocationUnits(task), resourceCapacity(conflict.resourceId, options)) : false;
+    }),
+    status
+  }));
 }
 
 function taskResourceId(task: Task, options?: ResourceLevelingOptions): string | undefined {
@@ -266,7 +291,7 @@ function compareLevelingPrecedence(
 /**
  * Computes project finish date (max end date across all live tasks).
  */
-function getProjectFinish(tasks: Task[]): string {
+export function getProjectFinish(tasks: Task[]): string {
   let finish = "";
   for (const t of tasks) {
     if (!t._deleted && (!finish || diffDays(finish, t.end) > 0)) {
@@ -364,13 +389,16 @@ export function levelResources(
   if (baselineCpm.errors?.length) {
     const finalFinish = getProjectFinish(workingTasks);
     const daysAdded = Math.max(0, diffDays(initialFinish, finalFinish));
+    const remainingOverallocations = detectOverAllocations(workingTasks, options);
     return {
       tasks: restoreDeleted(workingTasks),
       adjustments: [],
       initialOverallocations,
-      remainingOverallocations: initialOverallocations,
+      remainingOverallocations,
       projectDurationChanged: daysAdded > 0,
       daysAdded,
+      failed: true,
+      conflictDiagnostics: describeConflicts(remainingOverallocations, workingTasks, "schedule_invalid", options),
       unresolvedReasons: baselineCpm.errors
     };
   }
@@ -378,10 +406,13 @@ export function levelResources(
   if (invalidLocks.length) {
     const finalFinish = getProjectFinish(workingTasks);
     const daysAdded = Math.max(0, diffDays(initialFinish, finalFinish));
+    const remainingOverallocations = detectOverAllocations(workingTasks, options);
     return {
       tasks: restoreDeleted(workingTasks), adjustments: [], initialOverallocations,
-      remainingOverallocations: detectOverAllocations(workingTasks, options),
+      remainingOverallocations,
       projectDurationChanged: daysAdded > 0, daysAdded,
+      failed: true,
+      conflictDiagnostics: describeConflicts(remainingOverallocations, workingTasks, "schedule_invalid", options),
       unresolvedReasons: invalidLocks.map((t) => `Locked task '${t.id}' violates a dependency constraint.`)
     };
   }
@@ -615,6 +646,7 @@ export function levelResources(
     adjustments,
     initialOverallocations,
     remainingOverallocations,
+    conflictDiagnostics: describeConflicts(remainingOverallocations, workingTasks, pass >= maxIterations ? "iteration_limit" : "unresolved", options),
     projectDurationChanged,
     daysAdded,
     unresolvedReasons

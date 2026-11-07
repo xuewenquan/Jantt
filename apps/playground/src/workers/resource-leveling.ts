@@ -1,4 +1,5 @@
-import { levelResources, type ResourceLevelingOptions, type Task } from "@jantt/core";
+import { levelResources, type ResourceLevelingOptions } from "@jantt/core/resource-leveler";
+import type { Task } from "@jantt/core";
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<{ tasks: Task[]; options: ResourceLevelingOptions }>) => void) | null;

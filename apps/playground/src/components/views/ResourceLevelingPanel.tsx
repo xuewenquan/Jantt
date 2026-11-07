@@ -1,5 +1,5 @@
 import React from "react";
-import { CalendarError, detectOverAllocations, getScheduleContext, levelResources, resolvePersonById, type JanttData, type LevelingResult } from "@jantt/core";
+import { CalendarError, detectOverAllocations, getProjectFinish, getScheduleContext, levelResources, resolvePersonById, type JanttData, type LevelingResult } from "@jantt/core";
 
 interface Props {
   data: JanttData;
@@ -12,6 +12,7 @@ const formatPercent = (value: number): string => String(Math.round(value * 10000
 
 export const ResourceLevelingPanel: React.FC<Props> = ({ data, onCommit, readOnly, onPromptFork }) => {
   const [proposal, setProposal] = React.useState<LevelingResult | null>(null);
+  const proposalSource = React.useRef<JanttData | null>(null);
   const [calculating, setCalculating] = React.useState(false);
   const [error, setError] = React.useState("");
   const [defaultPercent, setDefaultPercent] = React.useState("");
@@ -69,6 +70,7 @@ export const ResourceLevelingPanel: React.FC<Props> = ({ data, onCommit, readOnl
 
   const preview = () => {
     setProposal(null);
+    proposalSource.current = data;
     setError("");
     if (typeof Worker === "undefined") {
       try { setProposal(levelResources(data.tasks, options)); }
@@ -87,9 +89,9 @@ export const ResourceLevelingPanel: React.FC<Props> = ({ data, onCommit, readOnl
         worker.terminate();
         workerRef.current = null;
       };
-      worker.onerror = () => {
+      worker.onerror = (event) => {
         if (workerRef.current !== worker) return;
-        setError("Resource leveling could not be completed.");
+        setError(event.message || "Resource leveling could not be completed.");
         setCalculating(false);
         worker.terminate();
         workerRef.current = null;
@@ -103,10 +105,14 @@ export const ResourceLevelingPanel: React.FC<Props> = ({ data, onCommit, readOnl
     }
   };
 
-  const changes = proposal?.tasks.flatMap((task) => {
+  // Invalidate during render, before the effect clears an old proposal or worker.
+  const currentProposal = proposalSource.current === data ? proposal : null;
+  const changes = currentProposal?.tasks.flatMap((task) => {
     const original = data.tasks.find((item) => item.id === task.id);
     return original && (original.start !== task.start || original.end !== task.end) ? [{ original, task }] : [];
   }) || [];
+  const beforeFinish = getProjectFinish(data.tasks);
+  const afterFinish = currentProposal ? getProjectFinish(currentProposal.tasks) : "";
 
   return (
     <section aria-label="Resource leveling" style={{ margin: "12px 0", padding: 16, border: "1px solid var(--jantt-border)", borderRadius: 8 }}>
@@ -129,22 +135,34 @@ export const ResourceLevelingPanel: React.FC<Props> = ({ data, onCommit, readOnl
         {calculating ? "Calculating…" : "Preview leveling"}
       </button>
       {error && <p role="alert">{error}</p>}
-      {proposal && (
+      {currentProposal && (
         <div aria-live="polite" style={{ marginTop: 12 }}>
-          <p>{proposal.adjustments.length} resource adjustment{proposal.adjustments.length === 1 ? "" : "s"}; {proposal.remainingOverallocations.length} resource-day overload{proposal.remainingOverallocations.length === 1 ? "" : "s"} remain. Project finish {proposal.daysAdded ? `extends by ${proposal.daysAdded} calendar day(s)` : "does not extend"}.</p>
+          <p><strong>{currentProposal.failed ? "Leveling failed" : currentProposal.remainingOverallocations.length ? "Overloads remain" : "No overloads remain"}</strong></p>
+          {!currentProposal.failed && <><p>{currentProposal.adjustments.length} resource adjustment{currentProposal.adjustments.length === 1 ? "" : "s"}; {currentProposal.remainingOverallocations.length} resource-day overload{currentProposal.remainingOverallocations.length === 1 ? "" : "s"} remain. Project finish {currentProposal.daysAdded ? `extends by ${currentProposal.daysAdded} calendar day(s)` : "does not extend"}.</p>
+          <p>Project finish: {beforeFinish || "-"} → {afterFinish || "-"}. {data.meta?.targetDate && <>Target: {data.meta.targetDate}. {afterFinish && (afterFinish > data.meta.targetDate ? "Preview exceeds the target date." : "Preview meets the target date.")}</>}</p></>}
+          {currentProposal.failed && <p>This preview is invalid and cannot be applied.{changes.length > 0 && " The dates below are from dependency resolution."}</p>}
           {changes.length > 0 && (
-            <ul>{changes.map(({ original, task }) => <li key={task.id}>{task.label || task.id}: {original.start}–{original.end} → {task.start}–{task.end}</li>)}</ul>
+            <ul>{changes.map(({ original, task }) => {
+              const adjustments = currentProposal.adjustments.filter((adjustment) => adjustment.taskId === task.id);
+              return <li key={task.id}>{task.label || task.id}: {original.start}–{original.end} → {task.start}–{task.end}
+                {adjustments.length ? <ul>{adjustments.map((adjustment, index) => <li key={index}>Resource: {adjustment.resourceId}. {adjustment.reason} {adjustment.withinFloat ? "Within float at the time of adjustment." : "Outside float at the time of adjustment."}</li>)}</ul> : <> - Schedule change (dependency cascade or initial scheduling).</>}
+              </li>;
+            })}</ul>
           )}
-          {proposal.remainingOverallocations.length > 0 && <div>
+          {currentProposal.remainingOverallocations.length > 0 && <div>
             <strong>Remaining overloads</strong>
-            <ul>{proposal.remainingOverallocations.slice(0, 20).map((item) => <li key={`${item.resourceId}-${item.date}`}>{item.resourceId}, {item.date}: {item.totalUnits * 100}% allocated / {item.capacity * 100}% available ({item.tasks.join(", ")})</li>)}</ul>
-            {proposal.remainingOverallocations.length > 20 && <p>And {proposal.remainingOverallocations.length - 20} more resource-days.</p>}
+            <ul>{currentProposal.remainingOverallocations.slice(0, 20).map((item) => {
+              const diagnostic = currentProposal.conflictDiagnostics?.find((entry) => entry.resourceId === item.resourceId && entry.date === item.date);
+              return <li key={`${item.resourceId}-${item.date}`}>{item.resourceId}, {item.date}: {formatPercent(item.totalUnits)}% allocated / {formatPercent(item.capacity)}% available ({item.tasks.join(", ")}){Boolean(diagnostic?.lockedTaskIds.length) && <>. Locked tasks: {diagnostic!.lockedTaskIds.join(", ")}.</>}{Boolean(diagnostic?.overCapacityTaskIds.length) && <> Tasks exceeding capacity individually: {diagnostic!.overCapacityTaskIds.join(", ")}.</>}{diagnostic?.status === "iteration_limit" && <> Leveling reached its iteration limit.</>}</li>;
+            })}</ul>
+            {currentProposal.remainingOverallocations.length > 20 && <p>And {currentProposal.remainingOverallocations.length - 20} more resource-days.</p>}
           </div>}
-          {proposal.unresolvedReasons?.map((reason, index) => <p key={index} role="status">{reason}</p>)}
-          <p>The preview uses a heuristic and does not split tasks. Review remaining conflicts before applying.</p>
-          <button type="button" className="btn-nav is-primary" disabled={changes.length === 0} onClick={() => {
+          {currentProposal.unresolvedReasons?.map((reason, index) => <p key={index} role="status">{reason}</p>)}
+          {!currentProposal.failed && <p>The preview uses a heuristic and does not split tasks. Review remaining conflicts before applying.</p>}
+          <button type="button" className="btn-nav is-primary" disabled={currentProposal.failed || changes.length === 0} onClick={() => {
+            if (proposalSource.current !== data || currentProposal.failed) return;
             if (readOnly) { onPromptFork?.(); return; }
-            onCommit({ ...data, tasks: proposal.tasks });
+            onCommit({ ...data, tasks: currentProposal.tasks });
             setProposal(null);
           }}>Apply preview</button>
         </div>
