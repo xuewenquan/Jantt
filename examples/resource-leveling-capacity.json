@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "title": "资源平衡验收：单任务超过容量",
+    "resourceCapacities": {
+      "alice": 0.5
+    }
+  },
+  "people": [
+    {
+      "id": "alice",
+      "name": "Alice"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "a",
+      "label": "超过兼职容量的任务",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "alice",
+      "allocation": 0.8,
+      "category": "work"
+    }
+  ],
+  "categories": {
+    "work": {
+      "label": "验收任务",
+      "color": "#3B82F6",
+      "soft": "#1E293B"
+    }
+  }
+}

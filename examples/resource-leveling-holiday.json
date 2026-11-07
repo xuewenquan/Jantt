@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "title": "资源平衡验收：人员休假",
+    "defaultGapDays": 2
+  },
+  "people": [
+    {
+      "id": "alice",
+      "name": "Alice",
+      "calendar": {
+        "workingDays": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "holidays": [
+          "2026-11-02"
+        ]
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "id": "a",
+      "label": "休假日锁定任务",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "alice",
+      "calendar": "continuous",
+      "locked": true,
+      "category": "work"
+    }
+  ],
+  "categories": {
+    "work": {
+      "label": "验收任务",
+      "color": "#3B82F6",
+      "soft": "#1E293B"
+    }
+  }
+}

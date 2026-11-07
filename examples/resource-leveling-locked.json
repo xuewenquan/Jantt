@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "title": "资源平衡验收：锁定任务",
+    "defaultGapDays": 2
+  },
+  "people": [
+    {
+      "id": "alice",
+      "name": "Alice"
+    },
+    {
+      "id": "bob",
+      "name": "Bob"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "a",
+      "label": "Alice 锁定任务 A",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "alice",
+      "locked": true,
+      "category": "work"
+    },
+    {
+      "id": "b",
+      "label": "Alice 锁定任务 B",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "alice",
+      "locked": true,
+      "category": "work"
+    },
+    {
+      "id": "c",
+      "label": "Bob 锁定任务",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "bob",
+      "locked": true,
+      "category": "work"
+    },
+    {
+      "id": "d",
+      "label": "Bob 可移动任务",
+      "start": "2026-11-02",
+      "end": "2026-11-02",
+      "assignee": "bob",
+      "category": "work"
+    }
+  ],
+  "categories": {
+    "work": {
+      "label": "验收任务",
+      "color": "#3B82F6",
+      "soft": "#1E293B"
+    }
+  }
+}

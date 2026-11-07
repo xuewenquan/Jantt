@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "title": "资源平衡验收：冲突与级联",
+    "defaultGapDays": 2,
+    "targetDate": "2026-11-08"
+  },
+  "people": [
+    {
+      "id": "alice",
+      "name": "Alice"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "a",
+      "label": "高优先级任务",
+      "start": "2026-11-02",
+      "end": "2026-11-03",
+      "assignee": "alice",
+      "priority": "high",
+      "category": "work"
+    },
+    {
+      "id": "b",
+      "label": "待平衡任务",
+      "start": "2026-11-02",
+      "end": "2026-11-03",
+      "assignee": "alice",
+      "priority": "low",
+      "category": "work"
+    },
+    {
+      "id": "c",
+      "label": "后续任务",
+      "start": "2026-11-05",
+      "end": "2026-11-06",
+      "dependsOn": "b",
+      "category": "work"
+    }
+  ],
+  "categories": {
+    "work": {
+      "label": "验收任务",
+      "color": "#3B82F6",
+      "soft": "#1E293B"
+    }
+  }
+}
